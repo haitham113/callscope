@@ -109,15 +109,19 @@ These features may appear in a roadmap, but they must not delay the contest subm
 4. The health indicator becomes **Healthy**, and CallScope stores a healthy baseline.
 5. The user clicks **Break audio track**.
 6. The sender's actual audio track is disabled; live state and statistics update.
-7. The user asks the browser agent: **“Why is this call silent? Diagnose it and propose the safest repair.”**
+7. The user asks the browser agent: **“Why is this call silent? Diagnose it and stage the safest repair.”**
 8. The agent calls `get_lab_context`, `inspect_call_state`, and `run_call_diagnostics`.
 9. The agent calls `stage_recovery_plan`; CallScope displays the evidence, proposed action, expected effect, and risk.
-10. The user explicitly approves the plan.
-11. The agent calls `apply_recovery_action` with the issued plan ID.
-12. CallScope re-enables the track and records a post-repair snapshot.
-13. The agent calls `compare_to_failure_baseline`.
-14. The UI changes from **Critical** to **Healthy** and displays the measured improvement.
-15. The agent calls `generate_incident_report` and CallScope displays a sanitized summary.
+10. The user clicks **Approve recovery**. This records approval only and does not change the media state.
+11. CallScope displays: **“Recovery approved. Tell the agent to continue.”**
+12. The user sends: **“Approved. Apply the repair, verify recovery, and generate the report.”**
+13. The agent calls `apply_recovery_action` with the issued plan ID.
+14. CallScope re-enables the track and records a stabilized post-repair snapshot.
+15. The agent calls `compare_to_failure_baseline`.
+16. The UI changes from **Critical** to **Healthy** and displays the measured improvement.
+17. The agent calls `generate_incident_report` and CallScope displays a sanitized summary.
+
+WebMCP does not push approval events to a waiting agent. The explicit second user message makes the continuation deterministic and keeps approval separate from application.
 
 ## 7. Demo Media and Fault Injection
 
@@ -147,6 +151,13 @@ This produces a real `RTCPeerConnection`, real senders/receivers, and real `getS
 - Observable evidence: Active cap in sender parameters, reduced outbound bitrate, and potentially reduced visual quality/frame throughput.
 - Allowed recovery: Restore the normal demo bitrate profile.
 - Demo value: Shows quantitative before-and-after verification.
+
+### Scenario switching
+
+- Only one simulated fault may be active at a time.
+- Applying a different fault requires the user to select **Reset scenario to healthy** first.
+- Reset restores the actual browser media state, invalidates earlier diagnoses and recovery plans, captures the resulting state, and records a truthful timeline event.
+- CallScope must never silently repair one fault while introducing another.
 
 ### Optional fault only after the core is stable
 
@@ -222,10 +233,17 @@ Required fields:
 - Expected result.
 - Risk level: `low`, `medium`, or `high`.
 - Whether the action is reversible.
-- **Approve and apply** and **Reject** controls.
+- **Approve recovery** and **Reject** controls.
 - Expiration notice for stale plans.
 
-The drawer must be visible when `stage_recovery_plan` succeeds. An action cannot be applied until the plan is approved.
+The drawer must be visible when `stage_recovery_plan` succeeds. **Approve recovery** changes only application-owned approval state; it never executes the repair. After approval, the drawer displays **Apply manually** as a visually secondary fallback. The WebMCP hero path uses `apply_recovery_action` after the user sends the explicit continuation message.
+
+Approval and application must be capability-separated:
+
+- The human-facing controller may expose `approvePlan()` and `rejectPlan()`.
+- The agent-facing WebMCP adapter must not receive either capability.
+- The executor reads current approval state immediately before mutation.
+- Approval is never inferred from drawer visibility, agent-authored text, or a generic click flag.
 
 ### 8.5 Before / After Comparison
 
@@ -293,6 +311,7 @@ Rules:
 
 - Each plan has a unique ID and is bound to the current session and fault snapshot.
 - Plans expire after 90 seconds or when the session/fault changes.
+- Human approval changes the plan to `approved` without applying its action.
 - `apply_recovery_action` accepts only an approved, unexpired plan ID.
 - A plan can invoke only an allowlisted action compatible with the detected fault.
 - Applying a stale, mismatched, or previously used plan returns an explicit error.
@@ -325,6 +344,15 @@ The health model is deterministic and explainable. It must not pretend to provid
 
 Display an explainable 0–100 lab-health score using rule-based deductions. Every deduction must be visible in the diagnosis output. Avoid false precision in the report; the categorical status is more important than the numeric score.
 
+### Deterministic evidence and verification
+
+- The lab may become **Healthy** only after both peers are connected, required tracks are live/enabled/attached, and at least one real outbound and inbound audio/video counter progresses across two samples.
+- Broader metrics such as audio energy, packet loss, jitter, RTT, and measured bitrate are supporting evidence when available; missing values never become zero.
+- Disabled-audio recovery requires a fresh read showing the actual outbound track changed from `enabled: false` to `enabled: true`, remains live and attached to the intended sender, both peers remain connected, and the media session still progresses.
+- Audio-energy recovery is valuable but not mandatory because browser support varies.
+- Video-bitrate diagnosis and recovery use fresh sender-parameter readback as primary evidence after every `setParameters()` call.
+- Measured bitrate, frame throughput, and visible quality are supporting evidence for the video scenario and must not be required to reach a truthful verdict.
+
 ## 11. WebMCP Tool Set
 
 All tools must:
@@ -334,6 +362,9 @@ All tools must:
 - Reuse the same application services used by manual UI controls.
 - Return structured, sanitized results.
 - Update the shared UI timeline so the user can see what the agent did.
+- Record actor identity internally: UI commands are `User`, tool handlers are `Agent`, and service events are `System`. Actor identity is never accepted as tool input.
+- Return only decisive evidence, limitations, identifiers required by the next action, and one or two suggested next tools.
+- Expose richer typed evidence than the summary UI without hiding the evidence a human needs to make an informed decision.
 - Reject invalid session IDs, stale plan IDs, and unsupported actions.
 - Never return raw IP addresses, full SDP, credentials, device labels, or secrets.
 - Be registered and cleaned up with an `AbortController` tied to the Vue component/application lifecycle.
@@ -359,6 +390,7 @@ Output fields:
 - `health_status`
 - `active_fault`
 - `pending_plan_id`
+- `pending_plan_status`
 - `webmcp_supported`
 - `suggested_next_tools`
 
@@ -468,7 +500,7 @@ Output fields:
 - `status: staged`
 - Risk and reversibility metadata.
 - Expiration timestamp.
-- Message that explicit user approval is required.
+- Message that explicit user approval is required and that approval does not apply the repair.
 
 Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: false`.
 
@@ -495,6 +527,7 @@ Validation:
 - The plan must be approved in the UI.
 - The plan must be unexpired, unused, and bound to the active session.
 - The active state must still match the diagnosis snapshot.
+- Approval must be read from application-owned state immediately before mutation.
 - The executor dispatches only a fixed internal action; it never executes agent-provided code or arbitrary parameters.
 
 Output fields:
@@ -581,12 +614,12 @@ Every meaningful WebMCP action must use application logic that is also available
 | Inspect current health | Yes | `get_lab_context`, `inspect_call_state` |
 | Run diagnostics | Yes | `run_call_diagnostics` |
 | Stage plan | Agent collaboration panel | `stage_recovery_plan` |
-| Approve/reject plan | Yes, human only | No agent approval tool |
-| Apply approved repair | Yes | `apply_recovery_action` |
+| Approve/reject plan | Yes, human only; approval does not apply | No agent approval tool |
+| Apply approved repair | **Apply manually** secondary fallback | `apply_recovery_action` |
 | Verify recovery | Yes | `compare_to_failure_baseline` |
 | Generate report | Yes | `generate_incident_report` |
 
-The agent must never possess a tool that approves its own plan.
+The agent must never possess a tool that approves its own plan. After the human approves, the UI explicitly asks them to send **“Approved. Apply the repair, verify recovery, and generate the report.”** The second message resumes the agent because WebMCP does not provide an automatic approval push notification.
 
 ## 13. Technical Architecture
 
@@ -596,7 +629,7 @@ The agent must never possess a tool that approves its own plan.
 - Vite.
 - JavaScript, not TypeScript.
 - Pinia for explicit application state.
-- Tailwind CSS or a small token-based CSS layer.
+- A small token-based CSS layer.
 - Native WebRTC APIs.
 - Native Web Audio and Canvas APIs.
 - Native `document.modelContext.registerTool()` WebMCP API.
@@ -612,7 +645,6 @@ No backend is required for the challenge MVP.
 src/
   app/
     App.vue
-    router.js
   features/
     lab/
       components/
@@ -706,6 +738,9 @@ src/
 - Clean registrations with `AbortController` on application teardown.
 - Show a clear unsupported-browser message while keeping manual demo controls usable.
 - Test in ChatGPT's in-app browser and the challenge-supported Chrome configuration.
+- Validate `registerTool()` registration, callback shape, annotations, invocation, and abort cleanup with a minimal temporary tool before building the full handlers.
+- Publish the first working shell over HTTPS early and keep validating the actual deployed origin throughout development.
+- Verify `canvas.captureStream(30)`, AudioContext gesture startup, two-peer cleanup, `RTCRtpSender.setParameters()` readback, and WebMCP discovery in the target environment before investing in broad observability.
 
 ## 14. Data Model
 
@@ -716,6 +751,8 @@ All MVP data is held in memory for the active page session.
 ```json
 {
   "id": "uuid",
+  "epoch": 1,
+  "fault_revision": 0,
   "state": "healthy",
   "started_at": "ISO-8601",
   "ended_at": null,
@@ -733,6 +770,8 @@ All MVP data is held in memory for the active page session.
 {
   "id": "uuid",
   "session_id": "uuid",
+  "session_epoch": 1,
+  "fault_revision": 1,
   "snapshot_hash": "string",
   "symptom": "silent_audio",
   "findings": [],
@@ -747,6 +786,8 @@ All MVP data is held in memory for the active page session.
 {
   "id": "uuid",
   "session_id": "uuid",
+  "session_epoch": 1,
+  "fault_revision": 1,
   "diagnosis_id": "uuid",
   "snapshot_hash": "string",
   "action": "enable_audio_track",
@@ -786,6 +827,10 @@ All MVP data is held in memory for the active page session.
 10. Expire plans and enforce one-time application.
 11. Show every tool-driven action in the timeline.
 12. Make the call reset action always available to the user.
+13. Give human and agent controllers only the capabilities they require; the agent controller never receives approval methods.
+14. Bind every asynchronous operation to the session ID, session epoch, fault revision where relevant, and an abort signal.
+15. Revalidate asynchronous ownership before committing any diagnosis, verification, timeline event, or tool result.
+16. Abort startup, diagnostic windows, verification, and pending waits on reset/end so late completions cannot update a new session.
 
 ## 16. Error Handling
 
@@ -817,6 +862,13 @@ Required error codes:
 - `PLAN_ALREADY_USED`
 - `RECOVERY_FAILED`
 - `VERIFICATION_INCOMPLETE`
+- `DIAGNOSIS_NOT_FOUND`
+- `PLAN_NOT_FOUND`
+- `MEDIA_CAPABILITY_UNSUPPORTED`
+- `LAB_START_FAILED`
+- `FAULT_MUTATION_FAILED`
+- `OPERATION_CANCELLED`
+- `CLEANUP_INCOMPLETE`
 
 Errors must be visible in the UI timeline and must not leave the lab in an ambiguous state.
 
@@ -849,6 +901,8 @@ The interface should feel like a modern operations console, not a generic AI cha
 - [ ] Two actual peer connections reach `connected` or `completed` as appropriate.
 - [ ] Generated audio and video counters progress.
 - [ ] Session teardown stops tracks, closes peer connections, and clears timers.
+- [ ] Real-browser cleanup confirms peers closed, generated/remote tracks stopped, AudioContext closed, animation stopped, and samplers/timers inactive.
+- [ ] Reset/end aborts in-flight startup, diagnosis, and verification without late state or timeline updates.
 
 ### Diagnostics
 
@@ -863,11 +917,13 @@ The interface should feel like a modern operations console, not a generic AI cha
 - [ ] Agent can discover and invoke all seven WebMCP tools.
 - [ ] Read tools do not mutate call state.
 - [ ] Staging a plan displays it in the UI.
+- [ ] **Approve recovery** records approval without changing media state.
 - [ ] Applying before approval fails safely.
 - [ ] Applying an expired or stale plan fails safely.
 - [ ] An approved compatible repair changes the actual media state.
 - [ ] Verification reports a measurable before/after difference.
 - [ ] Every action appears in the visible timeline.
+- [ ] After approval, the explicit second user message deterministically resumes the agent workflow.
 
 ### Product quality
 
@@ -889,6 +945,8 @@ The interface should feel like a modern operations console, not a generic AI cha
 - Plan expiry, approval, one-time use, and session binding.
 - Sanitization of IP-like values, SDP fields, and device labels.
 - Tool input validation and stable error results.
+- Session-epoch, fault-revision, cancellation, and late-completion guards.
+- Report identity excludes `report_generated` and inspection-only events that do not change the incident.
 
 ### Integration tests
 
@@ -898,6 +956,8 @@ The interface should feel like a modern operations console, not a generic AI cha
 - Rejected plan cannot execute.
 - Changed fault invalidates the earlier plan.
 - End/restart clears all session-owned state.
+- Reset during diagnosis or verification aborts the operation and prevents late mutation.
+- Applying before approval leaves the actual track and sender parameters unchanged.
 
 ### Browser/manual tests
 
@@ -905,6 +965,9 @@ The interface should feel like a modern operations console, not a generic AI cha
 - Supported Chrome configuration: same golden path.
 - WebMCP-disabled browser: graceful warning and functional manual controls.
 - Page refresh during each major state.
+- Real-resource cleanup receipt after repeated start/stop/restart cycles.
+- Early target-environment spikes for Canvas capture, AudioContext gesture startup, sender-parameter readback, WebMCP registration/cleanup, and deployed HTTPS discovery.
+- Manual WebMCP invocation with the user's Chrome plugin/extension, including exact inputs, structured outputs, and visible UI effects without requiring an AI agent.
 
 ## 20. Three-Minute Demo Script
 
@@ -915,68 +978,77 @@ Target duration: **2 minutes 30 seconds**, leaving a 30-second buffer.
 | 0:00–0:15 | State the problem: browser-call failures are difficult to correlate and repair. |
 | 0:15–0:35 | Start Demo Lab; show the healthy generated WebRTC call and live metrics. |
 | 0:35–0:50 | Trigger **Break audio track**; health becomes critical and audio energy stops. |
-| 0:50–1:20 | Ask the agent to diagnose; show WebMCP calls and the diagnosis appearing in the shared timeline. |
-| 1:20–1:45 | Agent stages a repair; show evidence, risk, reversibility, and explicit user approval. |
+| 0:50–1:15 | Ask the agent to diagnose and stage a repair; show WebMCP calls and the diagnosis in the shared timeline. |
+| 1:15–1:35 | Show evidence, risk, and reversibility; click **Approve recovery**, which does not change media. |
+| 1:35–1:45 | Send **“Approved. Apply the repair, verify recovery, and generate the report.”** |
 | 1:45–2:05 | Agent applies the approved repair; audio and health recover. |
-| 2:05–2:20 | Show before/after verification and the sanitized incident report. |
+| 2:05–2:20 | Show fresh before/after verification and the sanitized incident report. |
 | 2:20–2:30 | Close: WebMCP turns live browser state into a safe human-agent recovery workflow. |
 
 ## 21. Implementation Order
 
-### Milestone 1 — Deterministic WebRTC lab
+### Milestone 1 — Feasibility, visual shell, and deployed deterministic lab
 
-- Scaffold Vue/Vite/Pinia application.
-- Build generated audio/video sources.
-- Build loopback peer service and teardown.
-- Display connection, media, and basic stats.
+- Scaffold the Vue/Vite/Pinia application with the main judge-facing layout.
+- Build generated audio/video, the two-peer loopback, minimal real counter sampling, truthful Healthy state, cleanup, and restart.
+- Publish the first shell over HTTPS.
+- Run focused target-browser spikes for Canvas capture, AudioContext startup, `setParameters()` readback, WebMCP registration/invocation/abort cleanup, and deployed discovery.
 
-Exit condition: One-click healthy session works repeatedly.
+Exit condition: The deployed one-click call repeatedly becomes truthfully Healthy, cleans up completely, and all risky browser APIs are proven viable.
 
-### Milestone 2 — Faults and health engine
+### Milestone 2 — Complete manual audio-rescue vertical slice
 
-- Implement audio-disable and bitrate-cap faults.
-- Normalize stats and calculate deltas.
-- Implement health status, score, deductions, and failure baseline.
-- Build core workspace UI.
+- Implement the actual disabled-audio fault and failure baseline.
+- Implement authoritative diagnosis and compatible action mapping.
+- Stage the recovery, record human-only approval/rejection, and expose **Apply manually** as a secondary fallback.
+- Re-enable the actual track, perform fault-specific verification, render the on-screen report, and show the complete timeline.
 
-Exit condition: Both faults are deterministic and visually obvious.
+Exit condition: The full manual hero path works end to end, approval cannot be bypassed, and fresh evidence proves recovery.
 
-### Milestone 3 — Recovery workflow
+### Milestone 3 — Safety, privacy, errors, and lifecycle hardening
 
-- Implement diagnoses and allowed-action mapping.
-- Implement staged plan, approval, expiry, and safe executor.
-- Implement before/after verification.
-- Build timeline and recovery drawer.
+- Enforce state transitions, binding, expiry, rejection, mismatch, and one-time use.
+- Add session epochs, fault revisions, abortable async workflows, and late-completion protection.
+- Complete recursive sanitization, stable errors, real-browser cleanup assertions, and negative tests.
 
-Exit condition: Full manual golden path succeeds safely.
+Exit condition: Stale, expired, rejected, mismatched, concurrent, cancelled, and reused operations fail without media mutation or ambiguous state.
 
-### Milestone 4 — WebMCP integration
+### Milestone 4 — Full WebMCP golden path
 
-- Register seven tools with lifecycle cleanup.
-- Connect tools to existing services/stores.
-- Add sanitized structured results and errors.
-- Verify tool behavior in challenge-supported clients.
+- Register the exact seven tools with capability-scoped handlers and abort-controlled cleanup.
+- Connect them to the verified shared services.
+- Return concise structured results and show exact tool names in the timeline.
+- Implement the explicit post-approval continuation and validate the deployed site in supported clients and the manual Chrome plugin/extension.
 
-Exit condition: Agent completes the golden path without DOM clicking.
+Exit condition: The tool path completes the audio rescue without DOM clicking, while approval remains human-only and visibly separate from application.
 
-### Milestone 5 — Submission polish
+### Milestone 5 — Secondary bitrate fault and observability completion
 
-- Responsive and accessibility pass.
-- Automated tests and repeated clean-run rehearsals.
-- Static deployment and browser verification.
-- README, architecture diagram, license, screenshots, Devpost description, and video.
+- Implement the real video bitrate cap and restoration with fresh sender-parameter readback.
+- Add remaining metric cards, safe candidate categories, browser-availability limitations, and secondary recovery tests.
+- Keep sender state primary and noisy loopback metrics supporting only.
 
-Exit condition: A new judge can understand and run the experience without assistance.
+Exit condition: The bitrate path is truthful and repeatable without false claims based on browser-dependent metrics.
+
+### Milestone 6 — Production rehearsal and submission
+
+- Complete responsive and accessibility refinement.
+- Run production builds, previews, clean-clone tests, repeated deployed rehearsals, and console review.
+- Synchronize README, architecture, license, screenshots, project description, video, and submission materials with verified behavior.
+
+Exit condition: A new judge can understand and complete the deployed experience without assistance or undocumented setup.
 
 ## 22. Scope-Cut Order
 
 If time becomes constrained, cut in this order:
 
-1. PDF export; keep on-screen/Markdown report.
-2. Optional detached-track fault.
-3. Advanced metric charts; retain key numbers and comparison cards.
-4. Mobile-specific refinements beyond a functional stacked layout.
-5. Video-bitrate fault only if browser behavior proves inconsistent; retain the flawless audio golden path.
+1. Markdown file download; retain the on-screen report and structured Markdown tool output.
+2. PDF export.
+3. Optional detached-track fault.
+4. Advanced candidate details, metric charts, and packet-loss/jitter/RTT scoring; retain honest display values when available.
+5. Mobile-specific refinements beyond a functional stacked layout.
+6. Decorative animation and broad automated cross-browser coverage beyond the supported clients.
+7. Video-bitrate fault only as a last-resort documented specification exception if target-browser behavior remains unreliable; retain the flawless audio WebMCP path.
 
 Never cut:
 
@@ -998,6 +1070,9 @@ Never cut:
 | Bitrate cap is not visually dramatic | Display the configured cap and measured delta; keep audio failure as the video hero. |
 | Agent tries to apply a repair directly | Enforce approval in application state; tool call fails without it. |
 | Stale plan changes the wrong state | Bind plan to session and snapshot hash; revalidate immediately before execution. |
+| Agent does not automatically resume after approval | Display a deterministic continuation instruction and have the user send the explicit second message. |
+| Async diagnosis or verification completes after reset | Bind operations to session epoch/fault revision, abort on reset/end, and revalidate before commit. |
+| Browser resources leak between rehearsals | Produce and test a real cleanup receipt before discarding authoritative resource references. |
 | Judges do not run the live app | Make the video demonstrate the complete story clearly and keep the README concise. |
 | Similarity to monitoring products | Consistently position CallScope around live in-page collaboration, approval, repair, and verification. |
 
@@ -1040,10 +1115,14 @@ CallScope gives the agent direct, structured access to the running page's existi
 - Use the imperative WebMCP API.
 - Implement seven focused tools.
 - Require human approval in application state, independent of agent behavior.
+- Separate **Approve recovery** from application; approval never mutates media.
+- Resume the agent after approval through an explicit second user message.
 - Make the disabled-audio scenario the hero demo.
 - Keep the bitrate scenario as secondary proof of quantitative diagnostics.
+- Build and deploy the complete audio-rescue vertical slice before broadening observability.
+- Validate experimental browser and WebMCP APIs in the target environment early.
 - Exclude Janus, FreeSWITCH, FusionPBX, SIP, user accounts, and production monitoring from the MVP.
 
 ## 27. Definition of Done
 
-CallScope is ready to submit when a judge can open the live URL, start a generated WebRTC session, introduce the hero fault, ask the browser agent to diagnose it, review and approve the staged recovery, watch the agent restore the actual media state, see objective before/after verification, and generate a sanitized incident report—without credentials, external infrastructure, undocumented setup, or developer assistance.
+CallScope is ready to submit when a judge can open the live URL, start a generated WebRTC session, introduce the hero fault, ask the browser agent to diagnose and stage a repair, approve it without changing media, explicitly tell the agent to continue, watch the agent restore the actual media state, see objective before/after verification, and generate a sanitized incident report—without credentials, external infrastructure, undocumented setup, or developer assistance.
