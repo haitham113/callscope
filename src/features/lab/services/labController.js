@@ -1,4 +1,9 @@
 import { evaluateHealthyEvidence, deriveMetrics } from '../../diagnostics/services/healthEngine.js'
+import {
+  createAuthoritativeSnapshot,
+  hashSnapshot,
+} from '../../diagnostics/services/snapshotService.js'
+import { createAudioRescueRuntime } from '../../recovery/services/audioRescueRuntime.js'
 import { createStatsSampler } from '../../diagnostics/services/statsSampler.js'
 import { createDemoMedia } from './demoMediaService.js'
 import { createLoopbackPeerService } from './loopbackPeerService.js'
@@ -35,7 +40,7 @@ export function createLabController(store) {
     return (
       !ending &&
       store.sessionId === sessionId &&
-      ['starting', 'healthy'].includes(store.state)
+      !['idle', 'ended', 'failed'].includes(store.state)
     )
   }
 
@@ -74,6 +79,42 @@ export function createLabController(store) {
       metrics: deriveMetrics(previousSample, currentSample),
     })
     return result
+  }
+
+  async function buildCurrentSnapshot() {
+    if (!peers || !previousSample || !currentSample) {
+      throw new Error('Authoritative call evidence is not available yet.')
+    }
+    const snapshot = createAuthoritativeSnapshot({
+      sessionId: store.sessionId,
+      sessionEpoch: store.sessionEpoch,
+      faultRevision: store.faultRevision,
+      activeFault: store.activeFault,
+      peerStatus: peers.getSanitizedStatus(),
+      previousSample,
+      currentSample,
+    })
+    snapshot.snapshot_hash = await hashSnapshot(snapshot)
+    store.setLatestSnapshot(snapshot)
+    return snapshot
+  }
+
+  async function captureSnapshot({ stabilize }) {
+    const sessionId = store.sessionId
+    const signal = startAbortController?.signal
+    if (!activeSessionMatches(sessionId)) {
+      throw new DOMException('The active session changed.', 'AbortError')
+    }
+    if (stabilize) {
+      await sampler.sample()
+      await abortableDelay(1150, signal)
+    }
+    await sampler.sample()
+    if (!activeSessionMatches(sessionId)) {
+      throw new DOMException('The active session changed.', 'AbortError')
+    }
+    commitEvidence(sessionId)
+    return buildCurrentSnapshot()
   }
 
   function observeActiveHealth(sessionId, result) {
@@ -155,16 +196,7 @@ export function createLabController(store) {
         await sampler.sample()
         const result = commitEvidence(sessionId)
         if (result?.healthy) {
-          const baseline = {
-            captured_at: new Date().toISOString(),
-            checks: result.checks,
-            metrics: { ...store.metrics },
-            connection: { ...store.connection },
-            tracks: {
-              audio: { ...store.tracks.audio },
-              video: { ...store.tracks.video },
-            },
-          }
+          const baseline = await buildCurrentSnapshot()
           store.markHealthy(baseline)
           sampler.start(1000)
           beginElapsedTimer(sessionId)
@@ -275,5 +307,30 @@ export function createLabController(store) {
     if (store.state !== 'ended' && store.state !== 'idle') store.markEnded(receipt)
   }
 
-  return { start, end, dispose }
+  const rescueRuntime = createAudioRescueRuntime({
+    store,
+    captureSnapshot,
+    readAudioState() {
+      if (!peers) {
+        return { ready_state: 'unavailable', enabled: null, attached: false }
+      }
+      return peers.getOutboundTrackStatus('audio')
+    },
+    setAudioEnabled(enabled) {
+      if (!peers) throw new Error('No active peer connection is available.')
+      return peers.setOutboundTrackEnabled('audio', enabled)
+    },
+  })
+
+  return {
+    start,
+    end,
+    dispose,
+    breakAudioTrack: rescueRuntime.breakAudioTrack,
+    resetScenario: rescueRuntime.resetScenario,
+    diagnoseAndStageRecovery: rescueRuntime.diagnoseAndStageRecovery,
+    approvePlan: rescueRuntime.approvePlan,
+    rejectPlan: rescueRuntime.rejectPlan,
+    applyApprovedRecovery: rescueRuntime.applyApprovedRecovery,
+  }
 }

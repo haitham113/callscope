@@ -233,6 +233,24 @@ export async function createLoopbackPeerService(sourceStream, signal) {
     getVideoSender() {
       return outboundPeer.getSenders().find((sender) => sender.track?.kind === 'video')
     },
+    getOutboundTrackStatus(kind) {
+      const track = sourceStream.getTracks().find((item) => item.kind === kind)
+      const sender = outboundPeer.getSenders().find((item) => item.track === track)
+      return {
+        ready_state: track?.readyState ?? 'unavailable',
+        enabled: track?.enabled ?? null,
+        attached: Boolean(track && sender?.track === track),
+      }
+    },
+    setOutboundTrackEnabled(kind, enabled) {
+      const track = sourceStream.getTracks().find((item) => item.kind === kind)
+      const sender = outboundPeer.getSenders().find((item) => item.track === track)
+      if (!track || !sender || track.readyState !== 'live') {
+        throw new Error(`The outbound ${kind} track is not live and attached.`)
+      }
+      track.enabled = enabled
+      return this.getOutboundTrackStatus(kind)
+    },
     cleanup,
   }
 }

@@ -69,7 +69,8 @@ export function createStatsSampler({ outboundPeer, inboundPeer, onSample, onErro
   let stopped = false
 
   function sample() {
-    if (stopped || activeSamplePromise) return Promise.resolve(null)
+    if (stopped) return Promise.resolve(null)
+    if (activeSamplePromise) return activeSamplePromise
 
     const operation = (async () => {
       try {

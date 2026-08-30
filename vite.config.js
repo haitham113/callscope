@@ -8,6 +8,6 @@ export default defineConfig({
     target: 'es2022',
   },
   test: {
-    include: ['tests/unit/**/*.test.js'],
+    include: ['tests/unit/**/*.test.js', 'tests/integration/**/*.test.js'],
   },
 })

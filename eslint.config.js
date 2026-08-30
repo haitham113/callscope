@@ -31,6 +31,7 @@ export default [
         setInterval: 'readonly',
         setTimeout: 'readonly',
         structuredClone: 'readonly',
+        TextEncoder: 'readonly',
         window: 'readonly',
       },
     },

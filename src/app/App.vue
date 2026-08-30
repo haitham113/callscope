@@ -10,6 +10,7 @@ const controller = createLabController(store)
 const sourceCanvas = ref(null)
 const remoteVideo = ref(null)
 const startPending = ref(false)
+const operationPending = ref(false)
 const {
   sessionId,
   state,
@@ -25,13 +26,21 @@ const {
   lastCleanupReceipt,
   error,
   webMcpSupported,
+  activeFault,
+  faultRevision,
+  failureBaseline,
+  diagnosis,
+  recoveryPlan,
+  verification,
+  incidentReport,
 } = storeToRefs(store)
 
 const canStart = computed(() => ['idle', 'ended', 'failed'].includes(state.value))
 const healthTone = computed(() => {
   if (state.value === 'healthy') return 'healthy'
-  if (state.value === 'failed') return 'critical'
-  if (state.value === 'starting') return 'starting'
+  if (['critical', 'failed'].includes(state.value)) return 'critical'
+  if (state.value === 'degraded') return 'degraded'
+  if (['starting', 'diagnosing', 'recovering', 'verifying'].includes(state.value)) return 'starting'
   if (state.value === 'ended') return 'neutral'
   return 'ready'
 })
@@ -42,6 +51,12 @@ const elapsedLabel = computed(() => {
 })
 const sessionShort = computed(() => sessionId.value?.slice(0, 8) ?? 'not started')
 const endLabel = computed(() => (state.value === 'ended' ? 'Reset lab' : 'End / Reset'))
+const activeCall = computed(() => !['idle', 'starting', 'ended', 'failed'].includes(state.value))
+const canBreakAudio = computed(() => state.value === 'healthy' && !activeFault.value)
+const canResetScenario = computed(() => Boolean(activeFault.value) && !['recovering', 'verifying'].includes(state.value))
+const canDiagnose = computed(() => state.value === 'critical' && activeFault.value === 'disabled_audio')
+const approved = computed(() => recoveryPlan.value?.status === 'approved')
+const diagnosisFinding = computed(() => diagnosis.value?.findings?.[0] ?? null)
 
 const metricCards = computed(() => [
   {
@@ -82,6 +97,13 @@ function formatTime(isoDate) {
   }).format(new Date(isoDate))
 }
 
+function formatDateTime(isoDate) {
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'medium',
+  }).format(new Date(isoDate))
+}
+
 async function startLab() {
   if (!canStart.value || startPending.value) return
   startPending.value = true
@@ -94,6 +116,44 @@ async function startLab() {
 
 async function endOrReset() {
   await controller.end()
+}
+
+async function runOperation(operation) {
+  if (operationPending.value) return
+  operationPending.value = true
+  try {
+    await operation()
+  } finally {
+    operationPending.value = false
+  }
+}
+
+function breakAudio() {
+  return runOperation(() => controller.breakAudioTrack())
+}
+
+function resetScenario() {
+  return runOperation(() => controller.resetScenario())
+}
+
+function diagnoseAndStage() {
+  return runOperation(() => controller.diagnoseAndStageRecovery())
+}
+
+function approveRecovery() {
+  controller.approvePlan()
+}
+
+function rejectRecovery() {
+  controller.rejectPlan()
+}
+
+function applyManually() {
+  return runOperation(() => controller.applyApprovedRecovery())
+}
+
+function evidenceLabel(value) {
+  return value === null ? 'Unavailable' : String(value)
 }
 
 onMounted(() => store.setWebMcpSupport(detectWebMcpSupport()))
@@ -145,12 +205,12 @@ onBeforeUnmount(() => void controller.dispose())
             <span class="panel-kicker">Remote participant</span>
             <h2>Generated media loopback</h2>
           </div>
-          <span class="live-indicator" :class="{ active: state === 'healthy' }">
-            <span></span>{{ state === 'healthy' ? 'Live' : state }}
+          <span class="live-indicator" :class="{ active: activeCall }">
+            <span></span>{{ activeCall ? 'Live' : state }}
           </span>
         </div>
 
-        <div class="video-stage" :class="{ dormant: state !== 'healthy' }">
+        <div class="video-stage" :class="{ dormant: !activeCall }">
           <canvas ref="sourceCanvas" aria-hidden="true"></canvas>
           <video ref="remoteVideo" autoplay playsinline muted data-testid="remote-video"></video>
 
@@ -186,15 +246,31 @@ onBeforeUnmount(() => void controller.dispose())
                 <span :style="{ width: `${Math.round(audioLevel * 100)}%` }"></span>
               </div>
             </div>
-            <strong>{{ state === 'healthy' ? `${Math.round(audioLevel * 100)}%` : '—' }}</strong>
+            <strong>{{ activeCall ? `${Math.round(audioLevel * 100)}%` : '—' }}</strong>
           </div>
           <div class="track-chips">
-            <span :class="{ ok: tracks.audio.readyState === 'live' && tracks.audio.enabled }">
-              Audio {{ tracks.audio.readyState }}
+            <span data-testid="audio-track-status" :class="{ ok: tracks.audio.readyState === 'live' && tracks.audio.enabled, faulted: tracks.audio.enabled === false }">
+              Audio {{ tracks.audio.readyState }} · {{ tracks.audio.enabled === null ? 'unavailable' : tracks.audio.enabled ? 'enabled' : 'disabled' }}
             </span>
             <span :class="{ ok: tracks.video.readyState === 'live' && tracks.video.enabled }">
               Video {{ tracks.video.readyState }}
             </span>
+          </div>
+        </div>
+
+        <div v-if="activeCall" class="fault-controls" data-testid="fault-controls">
+          <div>
+            <span class="panel-kicker">Simulation controls</span>
+            <strong>Disabled-audio scenario</strong>
+            <small>Fault revision {{ faultRevision }}</small>
+          </div>
+          <div>
+            <button class="danger-button" type="button" data-testid="break-audio" :disabled="!canBreakAudio || operationPending" @click="breakAudio">
+              Break audio track
+            </button>
+            <button v-if="canResetScenario" class="secondary-button" type="button" data-testid="reset-scenario" :disabled="operationPending" @click="resetScenario">
+              Reset scenario to healthy
+            </button>
           </div>
         </div>
       </article>
@@ -246,6 +322,60 @@ onBeforeUnmount(() => void controller.dispose())
           </div>
         </article>
 
+        <article v-if="verification" class="panel comparison-panel" data-testid="before-after">
+          <div class="panel-heading">
+            <div>
+              <span class="panel-kicker">Fresh verification</span>
+              <h2>Failure baseline → recovered call</h2>
+            </div>
+            <span class="verdict" :class="verification.verdict">{{ verification.verdict.replaceAll('_', ' ') }}</span>
+          </div>
+          <div class="comparison-grid">
+            <section>
+              <span>Before</span>
+              <strong>{{ verification.before.health_status }} · {{ verification.before.health_score }}/100</strong>
+              <p>Audio enabled: {{ verification.before.audio_track.enabled }}</p>
+              <p>Attached/live: {{ verification.before.audio_track.attached }}/{{ verification.before.audio_track.ready_state }}</p>
+              <p>Peers: {{ verification.before.connection.outbound }}/{{ verification.before.connection.inbound }}</p>
+            </section>
+            <span class="comparison-arrow" aria-hidden="true">→</span>
+            <section>
+              <span>After</span>
+              <strong>{{ verification.after.health_status }} · {{ verification.after.health_score }}/100</strong>
+              <p>Audio enabled: {{ verification.after.audio_track.enabled }}</p>
+              <p>Fresh audio progression: {{ verification.after.audio_progression.outbound && verification.after.audio_progression.inbound ? 'confirmed' : 'incomplete' }}</p>
+              <p>Peers: {{ verification.after.connection.outbound }}/{{ verification.after.connection.inbound }}</p>
+            </section>
+          </div>
+          <ul class="verification-checks">
+            <li v-for="(passed, key) in verification.primary_checks" :key="key" :class="{ passed }">
+              <span>{{ passed ? '✓' : '!' }}</span>{{ key.replaceAll('_', ' ') }}
+            </li>
+          </ul>
+          <p class="supporting-note">Audio energy: {{ evidenceLabel(verification.before.audio_energy_delta) }} before, {{ evidenceLabel(verification.after.audio_energy_delta) }} after — supporting evidence only.</p>
+        </article>
+
+        <article v-if="incidentReport" class="panel report-panel" data-testid="incident-report">
+          <div class="panel-heading">
+            <div>
+              <span class="panel-kicker">Sanitized incident report</span>
+              <h2>Audio rescue report</h2>
+            </div>
+            <span class="report-id">{{ incidentReport.id.slice(0, 8) }}</span>
+          </div>
+          <dl>
+            <div><dt>Session</dt><dd>{{ incidentReport.session_id }}</dd></div>
+            <div><dt>Timestamps</dt><dd>Started {{ formatDateTime(incidentReport.started_at) }} · Reported {{ formatDateTime(incidentReport.generated_at) }}</dd></div>
+            <div><dt>Symptom</dt><dd>{{ incidentReport.symptom }}</dd></div>
+            <div><dt>Root cause</dt><dd>{{ incidentReport.root_cause }}</dd></div>
+            <div><dt>Evidence</dt><dd>Outbound audio was enabled=false, readyState=live, and attached=true. Track state is primary; energy is supporting only.</dd></div>
+            <div><dt>Approved recovery</dt><dd><code>{{ incidentReport.approved_recovery.action }}</code> · low risk · reversible</dd></div>
+            <div><dt>Verification</dt><dd>{{ incidentReport.verification_result.verdict }} · score +{{ incidentReport.verification_result.health_score_delta }}</dd></div>
+            <div><dt>Recommendation</dt><dd>{{ incidentReport.remaining_recommendations[0] }}</dd></div>
+          </dl>
+          <p class="sanitization-note">Generated media only · raw IP addresses, SDP, and device labels excluded.</p>
+        </article>
+
         <p v-if="error" class="error-banner" role="alert">{{ error }}</p>
       </section>
 
@@ -266,6 +396,10 @@ onBeforeUnmount(() => void controller.dispose())
                 <p><strong>{{ event.actor }}</strong><time>{{ formatTime(event.createdAt) }}</time></p>
                 <h3>{{ event.title }}</h3>
                 <span>{{ event.detail }}</span>
+                <details v-if="event.evidence">
+                  <summary>Sanitized evidence</summary>
+                  <pre>{{ JSON.stringify(event.evidence, null, 2) }}</pre>
+                </details>
               </div>
             </li>
           </ol>
@@ -280,11 +414,69 @@ onBeforeUnmount(() => void controller.dispose())
           <div class="drawer-handle"></div>
           <span class="panel-kicker">Human-controlled recovery</span>
           <h2>Recovery plan</h2>
-          <div class="locked-plan">
+          <div v-if="!recoveryPlan" class="locked-plan">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10V8a5 5 0 0 1 10 0v2m-9 0h8a2 2 0 0 1 2 2v7H6v-7a2 2 0 0 1 2-2Z" /></svg>
             <div>
               <strong>No plan staged</strong>
-              <p>Fault diagnosis and recovery controls arrive in the next milestone. No repair can run here yet.</p>
+              <p v-if="activeFault">Run the manual diagnosis to capture fresh evidence and stage the compatible repair.</p>
+              <p v-else>Introduce the disabled-audio scenario to begin the manual rescue.</p>
+            </div>
+          </div>
+          <div v-if="activeFault && !recoveryPlan" class="diagnose-action">
+            <button class="primary-button" type="button" data-testid="diagnose-stage" :disabled="!canDiagnose || operationPending || !failureBaseline" @click="diagnoseAndStage">
+              {{ state === 'diagnosing' ? 'Sampling evidence…' : 'Diagnose & stage recovery' }}
+            </button>
+          </div>
+
+          <div v-else-if="recoveryPlan" class="staged-plan" data-testid="recovery-plan">
+            <div class="plan-status-row">
+              <span :class="['plan-status', recoveryPlan.status]">{{ recoveryPlan.status }}</span>
+              <span>Expires {{ formatTime(recoveryPlan.expires_at) }}</span>
+            </div>
+            <h3>{{ diagnosisFinding?.title }}</h3>
+            <p class="diagnosis-meta">
+              <span>{{ diagnosisFinding?.severity }} severity</span>
+              <span>{{ diagnosisFinding?.confidence }} confidence</span>
+            </p>
+            <section>
+              <h4>Evidence</h4>
+              <ul>
+                <li v-for="item in diagnosisFinding?.evidence" :key="item.field">
+                  <code>{{ item.field }}</code> = {{ evidenceLabel(item.value) }} <small>{{ item.role }}</small>
+                </li>
+              </ul>
+            </section>
+            <section>
+              <h4>Proposed action</h4>
+              <code>{{ recoveryPlan.action }}</code>
+              <p>{{ recoveryPlan.reason }}</p>
+            </section>
+            <section>
+              <h4>Expected result</h4>
+              <p>{{ recoveryPlan.expected_result }}</p>
+            </section>
+            <div class="plan-properties">
+              <span>Risk <strong>{{ recoveryPlan.risk }}</strong></span>
+              <span>Reversible <strong>{{ recoveryPlan.reversible ? 'yes' : 'no' }}</strong></span>
+              <span>Expires in <strong>90 seconds</strong></span>
+            </div>
+            <details class="limitations">
+              <summary>Evidence limitations</summary>
+              <ul><li v-for="item in diagnosisFinding?.limitations" :key="item">{{ item }}</li></ul>
+            </details>
+
+            <div v-if="recoveryPlan.status === 'staged'" class="approval-actions">
+              <button class="primary-button" type="button" data-testid="approve-recovery" @click="approveRecovery">Approve recovery</button>
+              <button class="secondary-button" type="button" data-testid="reject-recovery" @click="rejectRecovery">Reject</button>
+              <small>Approval changes application state only. It does not change media.</small>
+            </div>
+
+            <div v-if="approved" class="approved-state" data-testid="approved-instruction">
+              <strong>Recovery approved. Tell the agent to continue.</strong>
+              <p>“Approved. Apply the repair, verify recovery, and generate the report.”</p>
+              <button class="manual-apply-button" type="button" data-testid="apply-manually" :disabled="operationPending" @click="applyManually">
+                {{ operationPending ? 'Applying and verifying…' : 'Apply manually' }}
+              </button>
             </div>
           </div>
         </article>
@@ -323,15 +515,15 @@ onBeforeUnmount(() => void controller.dispose())
       <div class="agent-avatar" aria-hidden="true">✦</div>
       <div>
         <span>Suggested agent prompt</span>
-        <p>“Why is this call silent? Diagnose it and stage the safest repair.”</p>
-        <small>Agent diagnosis is intentionally not active in Milestone 1.</small>
+        <p>{{ approved ? '“Approved. Apply the repair, verify recovery, and generate the report.”' : '“Why is this call silent? Diagnose it and stage the safest repair.”' }}</p>
+        <small>Manual parity is active. Production WebMCP tools are intentionally not registered yet.</small>
       </div>
       <button type="button" disabled title="WebMCP tools are introduced in a later milestone">Copy later</button>
     </section>
 
     <footer>
       <p>Generated media stays in this page. No recording, raw IP display, or external media service.</p>
-      <span>Milestone 1 · Deterministic lab</span>
+      <span>Milestone 2 · Manual audio rescue</span>
     </footer>
   </main>
 </template>

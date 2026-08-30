@@ -4,7 +4,7 @@
 
 CallScope is a browser-based workspace where a developer and an AI agent inspect, diagnose, repair, and verify a live WebRTC call together.
 
-Instead of asking the agent to interpret screenshots or copied logs, CallScope exposes the active page's peer-connection, media-track, sender, and health state through focused WebMCP tools. The agent can identify the fault, explain the evidence, stage a safe repair, and apply it only after the human explicitly approves it.
+Instead of asking an agent to interpret screenshots or copied logs, CallScope is being built to expose the active page's peer-connection, media-track, sender, and health state through focused WebMCP tools. The current Milestone 2 implementation proves the complete manual disabled-audio rescue against the same shared runtime, including human-only approval and fresh authoritative verification. Production WebMCP tools are not registered yet.
 
 > Observe → Diagnose → Explain → Propose repair → Human approval → Apply → Verify
 
@@ -46,14 +46,14 @@ The default demonstration uses a real, deterministic WebRTC loopback session:
 
 1. Click **Start Demo Lab** and watch the generated call become healthy.
 2. Click **Break audio track** to disable the actual outbound audio track.
-3. Ask the browser agent:
+3. Run **Diagnose & stage recovery** in the manual recovery drawer. The intended future agent prompt is:
 
    > Why is this call silent? Diagnose it and propose the safest repair.
 
-4. The agent inspects the live call and identifies the disabled audio track.
-5. The agent stages an `enable_audio_track` recovery with evidence, risk, reversibility, and expected result.
+4. CallScope samples the live call and identifies the disabled audio track.
+5. The shared runtime stages an `enable_audio_track` recovery with evidence, risk, reversibility, and expected result.
 6. CallScope waits for the human to approve or reject the recovery.
-7. After approval, the agent applies the repair.
+7. After approval, click the visually secondary **Apply manually** fallback. Approval itself does not change media.
 8. CallScope compares the failure baseline with the recovered call.
 9. The agent generates a sanitized incident report.
 
@@ -74,9 +74,9 @@ WebMCP allows the agent to:
 
 A traditional backend MCP integration would require duplicated session state, authentication, and a separate transport for rapidly changing browser metrics. Ordinary browser automation would have to infer technical state from UI text. WebMCP lets the agent work directly with the page's existing application logic while the page remains the shared human-agent workspace.
 
-## WebMCP Tools
+## Planned WebMCP Tools
 
-CallScope exposes seven focused tools:
+The locked specification defines exactly seven focused tools. They are intentionally not registered in Milestone 2; registration and agent-facing adapters are Milestone 4 work.
 
 | Tool | Type | Purpose |
 | --- | --- | --- |
@@ -106,6 +106,8 @@ Observable evidence includes:
 The allowlisted recovery sets the track back to `enabled: true`.
 
 ### Constrained video bitrate
+
+This secondary scenario is specified but intentionally not implemented in Milestone 2.
 
 CallScope uses `RTCRtpSender.setParameters()` to apply a deliberately low `maxBitrate` to the video encoding.
 
@@ -172,7 +174,7 @@ The incident report summarizes the symptom, root cause, sanitized evidence, appr
 ```mermaid
 flowchart TD
     H["Human interface"] --> S["Shared Vue and Pinia services"]
-    A["Browser agent"] --> M["WebMCP adapter"]
+    A["Future browser agent"] --> M["Planned WebMCP adapter"]
     M --> S
     S --> B["WebRTC, Web Audio, and Canvas APIs"]
     S --> U["Timeline, recovery, and report UI"]
@@ -251,11 +253,11 @@ The critical browser checks are:
 - A generated call starts without camera or microphone permission.
 - Both peer connections reach a connected state.
 - Audio/video counters progress.
-- Both fault scenarios change real browser media state.
+- The disabled-audio scenario changes the real outbound track state.
 - Applying a repair before approval fails safely.
 - An approved compatible repair changes the actual media state.
 - Verification produces measurable before-and-after evidence.
-- Tool results and reports contain no raw IP address or SDP.
+- Authoritative snapshots and reports contain no raw IP address or SDP.
 - Ending and restarting clears session-owned tracks, peers, timers, and state.
 
 ## Browser Support
