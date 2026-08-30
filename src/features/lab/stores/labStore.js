@@ -10,6 +10,26 @@ function emptyMetrics() {
   }
 }
 
+function emptyConnection() {
+  return { outbound: 'new', inbound: 'new', ice: 'new' }
+}
+
+function emptyTracks() {
+  return {
+    audio: { readyState: 'unavailable', enabled: null, attached: false },
+    video: { readyState: 'unavailable', enabled: null, attached: false },
+  }
+}
+
+function emptyEvidenceChecks() {
+  return {
+    peers_connected: false,
+    tracks_live_enabled_attached: false,
+    receiver_tracks_live: false,
+    bidirectional_audio_video_progress: false,
+  }
+}
+
 export const useLabStore = defineStore('lab', {
   state: () => ({
     sessionId: null,
@@ -20,18 +40,11 @@ export const useLabStore = defineStore('lab', {
     endedAt: null,
     elapsedSeconds: 0,
     webMcpSupported: false,
-    connection: { outbound: 'new', inbound: 'new', ice: 'new' },
-    tracks: {
-      audio: { readyState: 'unavailable', enabled: null, attached: false },
-      video: { readyState: 'unavailable', enabled: null, attached: false },
-    },
+    connection: emptyConnection(),
+    tracks: emptyTracks(),
     metrics: emptyMetrics(),
     audioLevel: 0,
-    evidenceChecks: {
-      peers_connected: false,
-      tracks_live_enabled_attached: false,
-      bidirectional_audio_video_progress: false,
-    },
+    evidenceChecks: emptyEvidenceChecks(),
     healthyBaseline: null,
     timeline: [],
     lastCleanupReceipt: null,
@@ -50,13 +63,11 @@ export const useLabStore = defineStore('lab', {
       this.startedAt = new Date().toISOString()
       this.endedAt = null
       this.elapsedSeconds = 0
-      this.connection = { outbound: 'new', inbound: 'new', ice: 'new' }
-      this.tracks = {
-        audio: { readyState: 'unavailable', enabled: null, attached: false },
-        video: { readyState: 'unavailable', enabled: null, attached: false },
-      }
+      this.connection = emptyConnection()
+      this.tracks = emptyTracks()
       this.metrics = emptyMetrics()
       this.audioLevel = 0
+      this.evidenceChecks = emptyEvidenceChecks()
       this.healthyBaseline = null
       this.error = null
       this.timeline = []
@@ -79,27 +90,50 @@ export const useLabStore = defineStore('lab', {
       this.healthyBaseline = baseline
       this.addTimeline('System', 'Healthy baseline captured', 'Two peers, live tracks, and progressing real media counters verified.')
     },
-    markFailed(message) {
+    markFailed(message, title = 'Lab startup failed', receipt = null) {
       if (this.state !== 'failed') this.transition('failed')
       this.healthStatus = 'Failed'
       this.healthScore = null
       this.error = message
-      this.addTimeline('System', 'Lab startup failed', message)
+      if (receipt) this.setCleanupEvidence(receipt)
+      this.addTimeline('System', title, message)
+    },
+    setCleanupEvidence(receipt) {
+      const cleanupComplete = Boolean(receipt?.complete)
+      this.connection = cleanupComplete
+        ? { outbound: 'closed', inbound: 'closed', ice: 'closed' }
+        : { outbound: 'unavailable', inbound: 'unavailable', ice: 'unavailable' }
+      this.tracks = {
+        audio: {
+          readyState: cleanupComplete ? 'ended' : 'unavailable',
+          enabled: null,
+          attached: false,
+        },
+        video: {
+          readyState: cleanupComplete ? 'ended' : 'unavailable',
+          enabled: null,
+          attached: false,
+        },
+      }
+      this.metrics = emptyMetrics()
+      this.audioLevel = 0
+      this.evidenceChecks = emptyEvidenceChecks()
+      this.lastCleanupReceipt = receipt
     },
     markEnded(receipt) {
       if (this.state !== 'ended') this.transition('ended')
       this.healthStatus = 'Ended'
       this.healthScore = null
       this.endedAt = new Date().toISOString()
-      this.connection = { outbound: 'closed', inbound: 'closed', ice: 'closed' }
-      this.tracks = {
-        audio: { readyState: 'ended', enabled: false, attached: false },
-        video: { readyState: 'ended', enabled: false, attached: false },
-      }
-      this.metrics = emptyMetrics()
-      this.audioLevel = 0
-      this.lastCleanupReceipt = receipt
-      this.addTimeline('System', 'Lab resources released', 'Cleanup evidence was captured before browser references were discarded.')
+      const cleanupComplete = Boolean(receipt?.complete)
+      this.setCleanupEvidence(receipt)
+      this.addTimeline(
+        'System',
+        cleanupComplete ? 'Lab resources released' : 'Lab cleanup incomplete',
+        cleanupComplete
+          ? 'Cleanup evidence was captured before browser references were discarded.'
+          : 'One or more tracked browser resources did not confirm release.',
+      )
     },
     recordCleanup(receipt) {
       this.lastCleanupReceipt = receipt
@@ -113,6 +147,12 @@ export const useLabStore = defineStore('lab', {
       this.startedAt = null
       this.endedAt = null
       this.elapsedSeconds = 0
+      this.connection = emptyConnection()
+      this.tracks = emptyTracks()
+      this.metrics = emptyMetrics()
+      this.audioLevel = 0
+      this.evidenceChecks = emptyEvidenceChecks()
+      this.healthyBaseline = null
       this.timeline = []
       this.error = null
     },

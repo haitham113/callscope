@@ -8,7 +8,19 @@ function progresses(previous, current, keys) {
   })
 }
 
-export function evaluateHealthyEvidence({ peers, tracks, previous, current }) {
+function nonNegativeDelta(previous, current) {
+  if (!Number.isFinite(previous) || !Number.isFinite(current)) return null
+  const delta = current - previous
+  return delta >= 0 ? delta : null
+}
+
+export function evaluateHealthyEvidence({
+  peers,
+  tracks,
+  receivers,
+  previous,
+  current,
+}) {
   const connectionReady =
     peers?.outbound === 'connected' && peers?.inbound === 'connected'
   const requiredTracks = ['audio', 'video']
@@ -16,6 +28,9 @@ export function evaluateHealthyEvidence({ peers, tracks, previous, current }) {
     const track = tracks?.[kind]
     return track?.readyState === 'live' && track.enabled && track.attached
   })
+  const receiversReady = requiredTracks.every(
+    (kind) => receivers?.[kind]?.readyState === 'live',
+  )
   const countersProgressing =
     progresses(previous?.outbound?.audio, current?.outbound?.audio, [
       'packets',
@@ -39,6 +54,7 @@ export function evaluateHealthyEvidence({ peers, tracks, previous, current }) {
   const checks = {
     peers_connected: connectionReady,
     tracks_live_enabled_attached: tracksReady,
+    receiver_tracks_live: receiversReady,
     bidirectional_audio_video_progress: countersProgressing,
   }
 
@@ -59,23 +75,34 @@ export function deriveMetrics(previous, current) {
   }
 
   const elapsedSeconds = (current.capturedAt - previous.capturedAt) / 1000
-  const outboundBytes = ['audio', 'video'].reduce((total, kind) => {
-    const before = previous.outbound[kind]?.bytes
-    const after = current.outbound[kind]?.bytes
-    return total + (Number.isFinite(before) && Number.isFinite(after) ? after - before : 0)
-  }, 0)
+  const outboundByteDeltas = ['audio', 'video'].map((kind) =>
+    nonNegativeDelta(
+      previous.outbound[kind]?.bytes,
+      current.outbound[kind]?.bytes,
+    ),
+  )
+  const outboundBytes = outboundByteDeltas.every(Number.isFinite)
+    ? outboundByteDeltas.reduce((total, delta) => total + delta, 0)
+    : null
   const beforeFrames = previous.outbound.video?.frames
   const afterFrames = current.outbound.video?.frames
-  const frameRate =
-    Number.isFinite(beforeFrames) && Number.isFinite(afterFrames)
-      ? Math.max(0, (afterFrames - beforeFrames) / elapsedSeconds)
-      : current.outbound.video?.framesPerSecond ?? null
+  const frameDelta = nonNegativeDelta(beforeFrames, afterFrames)
+  const reportedFrameRate = current.outbound.video?.framesPerSecond
+  const frameRate = Number.isFinite(frameDelta)
+    ? frameDelta / elapsedSeconds
+    : Number.isFinite(reportedFrameRate) && reportedFrameRate >= 0
+      ? reportedFrameRate
+      : null
+  const packetLoss = nonNegativeDelta(
+    previous.inbound.packetLoss,
+    current.inbound.packetLoss,
+  )
 
   return {
-    outboundBitrateKbps: Math.max(0, (outboundBytes * 8) / elapsedSeconds / 1000),
-    packetLoss: Number.isFinite(current.inbound.packetLoss)
-      ? current.inbound.packetLoss
+    outboundBitrateKbps: Number.isFinite(outboundBytes)
+      ? (outboundBytes * 8) / elapsedSeconds / 1000
       : null,
+    packetLoss,
     latencyMs: Number.isFinite(current.remote.roundTripTimeMs)
       ? current.remote.roundTripTimeMs
       : Number.isFinite(current.inbound.jitterMs)

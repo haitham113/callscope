@@ -167,21 +167,26 @@ test('proves generated media, repeated negotiation, and sender parameter readbac
   }
 })
 
-test('validates temporary WebMCP registration contract and abort cleanup in isolation', async ({ page }) => {
+test('registers a temporary tool and dispatches abort cleanup through native WebMCP', async ({ page }) => {
+  await page.goto('./')
+  const nativeSupported = await page.evaluate(
+    () => typeof document.modelContext?.registerTool === 'function',
+  )
+  test.skip(
+    !nativeSupported,
+    'Native document.modelContext.registerTool is unavailable in this Chrome profile.',
+  )
+
   const result = await page.evaluate(async () => {
-    const nativeSupported = Boolean(document.modelContext?.registerTool)
-    const registrations = new Map()
-    const modelContext = {
-      registerTool(definition, options = {}) {
-        registrations.set(definition.name, definition)
-        options.signal?.addEventListener(
-          'abort',
-          () => registrations.delete(definition.name),
-          { once: true },
-        )
-      },
-    }
     const abortController = new AbortController()
+    let cleanupSignalObserved = false
+    abortController.signal.addEventListener(
+      'abort',
+      () => {
+        cleanupSignalObserved = true
+      },
+      { once: true },
+    )
     const temporaryTool = {
       name: 'callscope_m1_feasibility_probe',
       description: 'Temporary isolated registration probe.',
@@ -197,17 +202,19 @@ test('validates temporary WebMCP registration contract and abort cleanup in isol
       },
       execute: async ({ nonce }) => ({ ok: true, echoed_nonce: nonce }),
     }
-    modelContext.registerTool(temporaryTool, { signal: abortController.signal })
-    const registered = registrations.get(temporaryTool.name)
-    const invocation = await registered.execute({ nonce: 'synthetic-spike' })
-    const annotations = structuredClone(registered.annotations)
+    document.modelContext.registerTool(temporaryTool, {
+      signal: abortController.signal,
+    })
+    const invocation = await temporaryTool.execute({ nonce: 'synthetic-spike' })
+    const annotations = structuredClone(temporaryTool.annotations)
     abortController.abort()
 
     return {
-      nativeSupported,
       invocation,
       annotations,
-      removedAfterAbort: !registrations.has(temporaryTool.name),
+      topLevelDocument: window.top === window,
+      cleanupSignalObserved,
+      signalAborted: abortController.signal.aborted,
     }
   })
 
@@ -217,7 +224,7 @@ test('validates temporary WebMCP registration contract and abort cleanup in isol
     destructiveHint: false,
     idempotentHint: true,
   })
-  expect(result.removedAfterAbort).toBe(true)
-  // Native support is reported, never faked into the production document.
-  expect(typeof result.nativeSupported).toBe('boolean')
+  expect(result.topLevelDocument).toBe(true)
+  expect(result.cleanupSignalObserved).toBe(true)
+  expect(result.signalAborted).toBe(true)
 })

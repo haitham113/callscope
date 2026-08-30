@@ -63,36 +63,55 @@ function normalizeStats(outboundReport, inboundReport) {
   return snapshot
 }
 
-export function createStatsSampler({ outboundPeer, inboundPeer, onSample }) {
+export function createStatsSampler({ outboundPeer, inboundPeer, onSample, onError }) {
   let intervalId = null
-  let sampling = false
+  let activeSamplePromise = null
+  let stopped = false
 
-  async function sample() {
-    if (sampling) return null
-    sampling = true
-    try {
-      const [outboundReport, inboundReport] = await Promise.all([
-        outboundPeer.getStats(),
-        inboundPeer.getStats(),
-      ])
-      const snapshot = normalizeStats(outboundReport, inboundReport)
-      onSample?.(snapshot)
-      return snapshot
-    } finally {
-      sampling = false
-    }
+  function sample() {
+    if (stopped || activeSamplePromise) return Promise.resolve(null)
+
+    const operation = (async () => {
+      try {
+        const [outboundReport, inboundReport] = await Promise.all([
+          outboundPeer.getStats(),
+          inboundPeer.getStats(),
+        ])
+        const snapshot = normalizeStats(outboundReport, inboundReport)
+        if (!stopped) onSample?.(snapshot)
+        return snapshot
+      } finally {
+        if (activeSamplePromise === operation) activeSamplePromise = null
+      }
+    })()
+    activeSamplePromise = operation
+    return operation
   }
 
   return {
     sample,
     start(intervalMs = 1000) {
-      if (intervalId !== null) return
-      intervalId = setInterval(() => void sample(), intervalMs)
+      if (intervalId !== null || stopped) return
+      intervalId = setInterval(() => {
+        void sample().catch((error) => onError?.(error))
+      }, intervalMs)
     },
-    stop() {
+    async stop() {
       if (intervalId !== null) clearInterval(intervalId)
       intervalId = null
-      return { sampler_active: false, sampling_in_flight: sampling }
+      stopped = true
+      const pendingSample = activeSamplePromise
+      if (pendingSample) {
+        try {
+          await pendingSample
+        } catch {
+          // Teardown waits for browser-owned sampling without hiding its final state.
+        }
+      }
+      return {
+        sampler_active: false,
+        sampling_in_flight: activeSamplePromise !== null,
+      }
     },
     isActive() {
       return intervalId !== null

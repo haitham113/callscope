@@ -239,9 +239,12 @@ The deployed WebMCP experience must be served over HTTPS.
 
 ```bash
 npm run test
-npm run test:e2e
 npm run build
+npm run test:e2e
 ```
+
+The browser suite also builds the production application before starting its
+local preview server.
 
 The critical browser checks are:
 

@@ -6,7 +6,7 @@ export default defineConfig({
   timeout: 45_000,
   expect: { timeout: 12_000 },
   use: {
-    baseURL: process.env.CALLSCOPE_BASE_URL || 'http://127.0.0.1:4173',
+    baseURL: process.env.CALLSCOPE_BASE_URL || 'http://127.0.0.1:4173/',
     browserName: 'chromium',
     channel: 'chrome',
     headless: true,
@@ -16,7 +16,7 @@ export default defineConfig({
   webServer: process.env.CALLSCOPE_BASE_URL
     ? undefined
     : {
-        command: 'npm run preview',
+        command: 'npm run build && npm run preview',
         url: 'http://127.0.0.1:4173',
         reuseExistingServer: true,
         timeout: 30_000,

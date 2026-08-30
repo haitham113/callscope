@@ -54,7 +54,7 @@ const metricCards = computed(() => [
     label: 'Packet loss',
     value: formatMetric(metrics.value.packetLoss, 0),
     unit: metrics.value.packetLoss === null ? '' : 'packets',
-    detail: 'Inbound counter; unavailable stays unavailable',
+    detail: 'Delta from consecutive inbound counters',
   },
   {
     label: 'RTT / jitter',
@@ -304,8 +304,18 @@ onBeforeUnmount(() => void controller.dispose())
         <li>Generated tracks {{ lastCleanupReceipt.media.generated_tracks_ended }}/{{ lastCleanupReceipt.media.generated_tracks_total }} ended</li>
         <li>Remote tracks {{ lastCleanupReceipt.peers.remote_tracks_ended }}/{{ lastCleanupReceipt.peers.remote_tracks_total }} ended</li>
         <li>AudioContext {{ lastCleanupReceipt.media.audio_context_state }}</li>
-        <li>Sampler {{ lastCleanupReceipt.sampler.sampler_active ? 'active' : 'stopped' }}</li>
+        <li>
+          Sampler
+          {{ lastCleanupReceipt.sampler.sampler_active
+            ? 'active'
+            : lastCleanupReceipt.sampler.sampling_in_flight
+              ? 'draining'
+              : 'stopped' }}
+        </li>
         <li>Animation {{ lastCleanupReceipt.media.animation_active ? 'active' : 'stopped' }}</li>
+        <li>Audio nodes {{ lastCleanupReceipt.media.audio_nodes_disconnected ? 'disconnected' : 'connected' }}</li>
+        <li>ICE tasks {{ lastCleanupReceipt.peers.candidate_operations_pending ?? 0 }} pending</li>
+        <li>Elapsed timer {{ lastCleanupReceipt.elapsed_timer_active ? 'active' : 'stopped' }}</li>
       </ul>
     </section>
 

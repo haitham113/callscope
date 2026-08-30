@@ -56,13 +56,25 @@ export async function createLoopbackPeerService(sourceStream, signal) {
   const remoteStream = new MediaStream()
   const listeners = []
   const candidateErrors = []
+  const candidateOperations = new Set()
   const pendingForOutbound = []
   const pendingForInbound = []
+  const expectedRemoteTrackKinds = new Set(
+    sourceStream.getTracks().map((track) => track.kind),
+  )
   let cleaned = false
 
   function listen(target, type, handler) {
     target.addEventListener(type, handler)
     listeners.push(() => target.removeEventListener(type, handler))
+  }
+
+  function trackCandidateOperation(operation) {
+    const trackedOperation = operation
+      .catch((error) => candidateErrors.push(error.name))
+      .finally(() => candidateOperations.delete(trackedOperation))
+    candidateOperations.add(trackedOperation)
+    return trackedOperation
   }
 
   function relayCandidate(targetPeer, pending) {
@@ -72,19 +84,19 @@ export async function createLoopbackPeerService(sourceStream, signal) {
         pending.push(event.candidate)
         return
       }
-      void targetPeer
-        .addIceCandidate(event.candidate)
-        .catch((error) => candidateErrors.push(error.name))
+      void trackCandidateOperation(targetPeer.addIceCandidate(event.candidate))
     }
   }
 
   async function flushCandidates(targetPeer, pending) {
     for (const candidate of pending.splice(0)) {
-      try {
-        await targetPeer.addIceCandidate(candidate)
-      } catch (error) {
-        candidateErrors.push(error.name)
-      }
+      await trackCandidateOperation(targetPeer.addIceCandidate(candidate))
+    }
+  }
+
+  async function settleCandidateOperations() {
+    while (candidateOperations.size > 0) {
+      await Promise.allSettled([...candidateOperations])
     }
   }
 
@@ -110,16 +122,22 @@ export async function createLoopbackPeerService(sourceStream, signal) {
     await outboundPeer.setRemoteDescription(answer)
     await flushCandidates(outboundPeer, pendingForOutbound)
     await waitForConnected(outboundPeer, inboundPeer, 12_000, signal)
+    await settleCandidateOperations()
   } catch (error) {
     listeners.splice(0).forEach((remove) => remove())
     remoteStream.getTracks().forEach((track) => track.stop())
     outboundPeer.close()
     inboundPeer.close()
+    await settleCandidateOperations()
     throw error
   }
 
   function getSanitizedStatus() {
     const senderTracks = outboundPeer.getSenders().map((sender) => sender.track)
+    const receiverTracks = inboundPeer
+      .getReceivers()
+      .map((receiver) => receiver.track)
+      .filter(Boolean)
     const tracks = Object.fromEntries(
       ['audio', 'video'].map((kind) => {
         const track = sourceStream.getTracks().find((item) => item.kind === kind)
@@ -129,6 +147,17 @@ export async function createLoopbackPeerService(sourceStream, signal) {
             readyState: track?.readyState ?? 'unavailable',
             enabled: track?.enabled ?? null,
             attached: Boolean(track && senderTracks.includes(track)),
+          },
+        ]
+      }),
+    )
+    const receivers = Object.fromEntries(
+      ['audio', 'video'].map((kind) => {
+        const track = receiverTracks.find((item) => item.kind === kind)
+        return [
+          kind,
+          {
+            readyState: track?.readyState ?? 'unavailable',
           },
         ]
       }),
@@ -143,43 +172,57 @@ export async function createLoopbackPeerService(sourceStream, signal) {
           : iceStates.join(' / '),
       },
       tracks,
+      receivers,
       candidate_exchange_errors: candidateErrors.length,
+      candidate_operations_pending: candidateOperations.size,
     }
   }
 
-  async function cleanup() {
-    if (cleaned) {
-      return {
-        peer_connections_total: 2,
-        peer_connections_closed: 2,
-        remote_tracks_total: remoteStream.getTracks().length,
-        remote_tracks_ended: remoteStream
-          .getTracks()
-          .filter((track) => track.readyState === 'ended').length,
-        listeners_removed: true,
-      }
-    }
-    cleaned = true
-    listeners.splice(0).forEach((remove) => remove())
-    const remoteTracks = remoteStream.getTracks()
-    remoteTracks.forEach((track) => track.stop())
-    outboundPeer.getSenders().forEach((sender) => sender.track?.stop())
-    outboundPeer.close()
-    inboundPeer.close()
-    await Promise.resolve()
+  function collectRemoteTracks() {
+    return [
+      ...new Map(
+        [
+          ...remoteStream.getTracks(),
+          ...inboundPeer
+            .getReceivers()
+            .map((receiver) => receiver.track)
+            .filter(Boolean),
+        ].map((track) => [track.id, track]),
+      ).values(),
+    ]
+  }
 
+  function createCleanupReceipt() {
+    const remoteTracks = collectRemoteTracks()
     return {
       peer_connections_total: 2,
       peer_connections_closed: [outboundPeer, inboundPeer].filter(
         (peer) => peer.connectionState === 'closed',
       ).length,
+      remote_tracks_expected: expectedRemoteTrackKinds.size,
       remote_tracks_total: remoteTracks.length,
       remote_tracks_ended: remoteTracks.filter(
         (track) => track.readyState === 'ended',
       ).length,
       listeners_removed: listeners.length === 0,
       candidate_exchange_errors: candidateErrors.length,
+      candidate_operations_pending: candidateOperations.size,
     }
+  }
+
+  async function cleanup() {
+    if (cleaned) return createCleanupReceipt()
+    cleaned = true
+    listeners.splice(0).forEach((remove) => remove())
+    const remoteTracks = collectRemoteTracks()
+    remoteTracks.forEach((track) => track.stop())
+    outboundPeer.getSenders().forEach((sender) => sender.track?.stop())
+    outboundPeer.close()
+    inboundPeer.close()
+    await settleCandidateOperations()
+    await Promise.resolve()
+
+    return createCleanupReceipt()
   }
 
   return {

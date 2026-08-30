@@ -28,6 +28,8 @@ export function createLabController(store) {
   let remoteVideoElement = null
   let cleanupPromise = null
   let ending = false
+  let consecutiveUnhealthySamples = 0
+  let healthFailureScheduled = false
 
   function activeSessionMatches(sessionId) {
     return (
@@ -61,6 +63,7 @@ export function createLabController(store) {
     const result = evaluateHealthyEvidence({
       peers: status.connection,
       tracks: status.tracks,
+      receivers: status.receivers,
       previous: previousSample,
       current: currentSample,
     })
@@ -73,6 +76,31 @@ export function createLabController(store) {
     return result
   }
 
+  function observeActiveHealth(sessionId, result) {
+    if (store.state !== 'healthy' || !activeSessionMatches(sessionId)) return
+    consecutiveUnhealthySamples = result?.healthy
+      ? 0
+      : consecutiveUnhealthySamples + 1
+    if (consecutiveUnhealthySamples < 3 || healthFailureScheduled) return
+
+    healthFailureScheduled = true
+    void Promise.resolve().then(() => {
+      void failActiveSession(
+        sessionId,
+        'Live browser evidence stopped meeting the healthy-call requirements.',
+      )
+    })
+  }
+
+  async function failActiveSession(sessionId, message) {
+    if (!activeSessionMatches(sessionId) || store.state !== 'healthy') return
+    ending = true
+    const receipt = await cleanupResources()
+    if (store.sessionId === sessionId && store.state === 'healthy') {
+      store.markFailed(message, 'Active lab failed', receipt)
+    }
+  }
+
   async function start(canvas, videoElement) {
     if (!['idle', 'ended', 'failed'].includes(store.state)) return
     store.beginSession()
@@ -82,6 +110,8 @@ export function createLabController(store) {
     remoteVideoElement = videoElement
     cleanupPromise = null
     ending = false
+    consecutiveUnhealthySamples = 0
+    healthFailureScheduled = false
 
     try {
       const createdMedia = await createDemoMedia(canvas)
@@ -113,7 +143,11 @@ export function createLabController(store) {
           if (!activeSessionMatches(sessionId)) return
           previousSample = currentSample
           currentSample = snapshot
-          commitEvidence(sessionId)
+          const result = commitEvidence(sessionId)
+          observeActiveHealth(sessionId, result)
+        },
+        onError() {
+          observeActiveHealth(sessionId, null)
         },
       })
 
@@ -155,7 +189,7 @@ export function createLabController(store) {
       startAbortController?.abort()
       startAbortController = null
       stopElapsedTimer()
-      const samplerReceipt = sampler?.stop() ?? {
+      const samplerReceipt = (sampler ? await sampler.stop() : null) ?? {
         sampler_active: false,
         sampling_in_flight: false,
       }
@@ -164,9 +198,12 @@ export function createLabController(store) {
         : {
             peer_connections_total: 0,
             peer_connections_closed: 0,
+            remote_tracks_expected: 0,
             remote_tracks_total: 0,
             remote_tracks_ended: 0,
             listeners_removed: true,
+            candidate_exchange_errors: 0,
+            candidate_operations_pending: 0,
           }
       const mediaReceipt = media
         ? await media.cleanup()
@@ -186,6 +223,7 @@ export function createLabController(store) {
       }
       const complete =
         peerReceipt.peer_connections_closed === peerReceipt.peer_connections_total &&
+        peerReceipt.remote_tracks_total === peerReceipt.remote_tracks_expected &&
         peerReceipt.remote_tracks_ended === peerReceipt.remote_tracks_total &&
         mediaReceipt.generated_tracks_ended === mediaReceipt.generated_tracks_total &&
         ['closed', 'not-created'].includes(mediaReceipt.audio_context_state) &&
@@ -194,6 +232,9 @@ export function createLabController(store) {
         !mediaReceipt.animation_frame_pending &&
         !mediaReceipt.audio_meter_active &&
         !samplerReceipt.sampler_active &&
+        !samplerReceipt.sampling_in_flight &&
+        peerReceipt.candidate_operations_pending === 0 &&
+        elapsedIntervalId === null &&
         peerReceipt.listeners_removed
 
       const receipt = {
