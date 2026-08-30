@@ -37,4 +37,18 @@ describe('lab store session reset', () => {
     expect(Object.values(store.metrics).every((value) => value === null)).toBe(true)
     expect(store.healthyBaseline).toBeNull()
   })
+
+  it('assigns timeline actors internally instead of accepting caller provenance', () => {
+    const store = useLabStore()
+    store.beginSession()
+
+    expect(store.addTimeline).toBeUndefined()
+    store.recordSystemEvent('Browser evidence captured', 'Authoritative state sampled.')
+
+    expect(store.timeline.at(-1)).toMatchObject({
+      actor: 'System',
+      title: 'Browser evidence captured',
+      detail: 'Authoritative state sampled.',
+    })
+  })
 })

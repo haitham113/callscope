@@ -84,4 +84,24 @@ describe('authoritative sanitized snapshots', () => {
     repaired.tracks.audio.enabled = true
     expect(await hashSnapshot(repaired)).not.toBe(await hashSnapshot(first))
   })
+
+  it('does not claim Healthy when an authoritative receiver track has ended', () => {
+    const status = peerStatus(true)
+    status.receivers.audio.readyState = 'ended'
+
+    const snapshot = createAuthoritativeSnapshot({
+      sessionId: 'session-safe',
+      sessionEpoch: 2,
+      faultRevision: 0,
+      activeFault: null,
+      peerStatus: status,
+      previousSample: sample(1000),
+      currentSample: sample(2000, 2),
+    })
+
+    expect(snapshot.health.status).toBe('critical')
+    expect(snapshot.health.deductions).toContainEqual(
+      expect.objectContaining({ code: 'AUDIO_RECEIVER_UNAVAILABLE' }),
+    )
+  })
 })

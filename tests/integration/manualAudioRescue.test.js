@@ -30,13 +30,17 @@ function healthyStore() {
   return store
 }
 
-async function harness() {
+async function harness({ mutateAudio, failSnapshotAt, stallFirstRecoverySample = false } = {}) {
   const store = healthyStore()
   const audio = { ready_state: 'live', enabled: true, attached: true }
   let sampleRevision = 0
   async function captureSnapshot() {
     sampleRevision += 1
+    if (sampleRevision === failSnapshotAt) {
+      throw new Error('simulated fresh sample failure')
+    }
     const enabled = audio.enabled
+    const audioProgressing = !(stallFirstRecoverySample && sampleRevision === 4)
     const snapshot = {
       session_id: store.sessionId,
       session_epoch: store.sessionEpoch,
@@ -50,8 +54,8 @@ async function harness() {
       },
       receivers: { audio: { ready_state: 'live' }, video: { ready_state: 'live' } },
       media_progression: {
-        outbound_audio: true,
-        inbound_audio: true,
+        outbound_audio: audioProgressing,
+        inbound_audio: audioProgressing,
         outbound_video: true,
         inbound_video: true,
       },
@@ -63,9 +67,13 @@ async function harness() {
         audio_energy_delta: enabled ? 0.2 : 0,
       },
       health: {
-        status: enabled ? 'healthy' : 'critical',
-        score: enabled ? 100 : 55,
-        deductions: enabled ? [] : [{ code: 'AUDIO_TRACK_DISABLED', points: 45 }],
+        status: enabled ? (audioProgressing ? 'healthy' : 'degraded') : 'critical',
+        score: enabled ? (audioProgressing ? 100 : 80) : 55,
+        deductions: enabled
+          ? audioProgressing
+            ? []
+            : [{ code: 'MEDIA_PROGRESSION_INCOMPLETE', points: 20 }]
+          : [{ code: 'AUDIO_TRACK_DISABLED', points: 45 }],
       },
     }
     snapshot.snapshot_hash = await hashSnapshot(snapshot)
@@ -76,6 +84,7 @@ async function harness() {
     captureSnapshot,
     readAudioState: () => ({ ...audio }),
     setAudioEnabled(enabled) {
+      if (mutateAudio) return mutateAudio(audio, enabled)
       audio.enabled = enabled
     },
     now: () => 10_000,
@@ -145,5 +154,80 @@ describe('complete manual disabled-audio rescue workflow', () => {
     expect(store.state).toBe('healthy')
     expect(store.activeFault).toBeNull()
     expect(store.recoveryPlan).toBeNull()
+  })
+
+  it('rejects reset during diagnosis before mutating the actual audio track', async () => {
+    const { store, audio, runtime } = await harness()
+    await runtime.breakAudioTrack()
+    store.beginDiagnosis()
+
+    const result = await runtime.resetScenario()
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: 'INVALID_STATE_TRANSITION' },
+    })
+    expect(audio.enabled).toBe(false)
+    expect(store.state).toBe('diagnosing')
+    expect(store.activeFault).toBe('disabled_audio')
+  })
+
+  it('returns to Critical without mutation when the approved executor fails', async () => {
+    const { store, audio, runtime } = await harness({
+      mutateAudio(target, enabled) {
+        if (enabled) throw new Error('simulated browser mutation failure')
+        target.enabled = false
+      },
+    })
+    await runtime.breakAudioTrack()
+    await runtime.diagnoseAndStageRecovery()
+    runtime.approvePlan()
+
+    const result = await runtime.applyApprovedRecovery(store.recoveryPlan.id)
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: 'RECOVERY_FAILED', recoverable: false },
+    })
+    expect(audio.enabled).toBe(false)
+    expect(store.state).toBe('critical')
+    expect(store.healthStatus).toBe('Critical')
+    expect(store.recoveryPlan.status).toBe('approved')
+  })
+
+  it('returns to Critical with an unverified applied plan when fresh sampling fails', async () => {
+    const { store, audio, runtime } = await harness({ failSnapshotAt: 4 })
+    await runtime.breakAudioTrack()
+    await runtime.diagnoseAndStageRecovery()
+    runtime.approvePlan()
+
+    const result = await runtime.applyApprovedRecovery(store.recoveryPlan.id)
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: 'VERIFICATION_INCOMPLETE', recoverable: true },
+    })
+    expect(audio.enabled).toBe(true)
+    expect(store.state).toBe('critical')
+    expect(store.healthStatus).toBe('Critical')
+    expect(store.recoveryPlan.status).toBe('applied')
+    expect(store.verification).toBeNull()
+    expect(store.incidentReport).toBeNull()
+  })
+
+  it('waits for a fresh audio-progression sample before claiming recovery', async () => {
+    const { store, runtime } = await harness({ stallFirstRecoverySample: true })
+    await runtime.breakAudioTrack()
+    await runtime.diagnoseAndStageRecovery()
+    runtime.approvePlan()
+
+    const result = await runtime.applyApprovedRecovery(store.recoveryPlan.id)
+
+    expect(result.ok).toBe(true)
+    expect(result.verification).toMatchObject({
+      verdict: 'recovered',
+      primary_checks: { fresh_audio_media_progression: true },
+    })
+    expect(store.state).toBe('healthy')
   })
 })

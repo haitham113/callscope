@@ -41,7 +41,7 @@ export function diagnoseDisabledAudio(snapshot, createId = () => crypto.randomUU
             { field: 'tracks.audio.ready_state', value: audio.ready_state, role: 'primary' },
             { field: 'tracks.audio.attached', value: audio.attached, role: 'primary' },
           ],
-          limitations: ['This Milestone 2 rule diagnoses only the disabled-audio scenario.'],
+          limitations: ['This rule diagnoses only the disabled-audio scenario.'],
           allowed_actions: [],
         },
       ]

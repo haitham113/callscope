@@ -47,9 +47,12 @@ async function approveAndApply(page) {
   )
   await expect(page.getByTestId('audio-track-status')).toContainText('disabled')
   await page.getByTestId('apply-manually').click()
-  await expect(page.getByTestId('before-after')).toContainText('recovered', {
+  await expect(page.getByTestId('before-after').locator('.verdict')).toHaveText('recovered', {
     timeout: 12_000,
   })
+  await expect(page.getByTestId('before-after')).toContainText(
+    'Failure baseline → post-repair call',
+  )
   await expect(page.getByTestId('health-status')).toContainText('Healthy')
   await expect(page.getByTestId('audio-track-status')).toContainText('enabled')
   await expect(page.getByTestId('before-after')).toContainText('Audio enabled: false')

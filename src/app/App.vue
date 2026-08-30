@@ -326,7 +326,7 @@ onBeforeUnmount(() => void controller.dispose())
           <div class="panel-heading">
             <div>
               <span class="panel-kicker">Fresh verification</span>
-              <h2>Failure baseline → recovered call</h2>
+              <h2>Failure baseline → post-repair call</h2>
             </div>
             <span class="verdict" :class="verification.verdict">{{ verification.verdict.replaceAll('_', ' ') }}</span>
           </div>

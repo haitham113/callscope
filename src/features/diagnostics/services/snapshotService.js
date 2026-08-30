@@ -1,4 +1,4 @@
-import { deriveMetrics } from './healthEngine.js'
+import { deriveMetrics, evaluateCallHealth } from './healthEngine.js'
 import { sanitizeValue } from './sanitizer.js'
 
 function progressed(previous, current, keys) {
@@ -13,67 +13,6 @@ function progressed(previous, current, keys) {
 function delta(previous, current) {
   if (!Number.isFinite(previous) || !Number.isFinite(current)) return null
   return current >= previous ? current - previous : null
-}
-
-function statusAndScore(connection, tracks, progression) {
-  const deductions = []
-  const peersConnected =
-    connection.outbound === 'connected' && connection.inbound === 'connected'
-  if (!peersConnected) {
-    deductions.push({
-      code: 'PEERS_NOT_CONNECTED',
-      severity: 'critical',
-      points: 60,
-      explanation: 'Both in-page peer connections must remain connected.',
-    })
-  }
-
-  for (const kind of ['audio', 'video']) {
-    const track = tracks[kind]
-    if (track.ready_state !== 'live' || !track.attached) {
-      deductions.push({
-        code: `${kind.toUpperCase()}_TRACK_UNAVAILABLE`,
-        severity: 'critical',
-        points: 50,
-        explanation: `The outbound ${kind} track must be live and attached to its sender.`,
-      })
-    }
-  }
-
-  if (tracks.audio.ready_state === 'live' && tracks.audio.attached && !tracks.audio.enabled) {
-    deductions.push({
-      code: 'AUDIO_TRACK_DISABLED',
-      severity: 'critical',
-      points: 45,
-      explanation: 'The actual outbound audio track is disabled.',
-    })
-  }
-
-  const mediaProgressing = [
-    progression.outbound_audio,
-    progression.inbound_audio,
-    progression.outbound_video,
-    progression.inbound_video,
-  ].every((value) => value === true)
-  if (!mediaProgressing && deductions.length === 0) {
-    deductions.push({
-      code: 'MEDIA_PROGRESSION_INCOMPLETE',
-      severity: 'warning',
-      points: 20,
-      explanation: 'A fresh sample has not confirmed progression for every media direction.',
-    })
-  }
-
-  const score = Math.max(
-    0,
-    100 - deductions.reduce((total, deduction) => total + deduction.points, 0),
-  )
-  const critical = deductions.some((deduction) => deduction.severity === 'critical')
-  return {
-    status: critical ? 'critical' : deductions.length ? 'degraded' : 'healthy',
-    score,
-    deductions,
-  }
 }
 
 export function createAuthoritativeSnapshot({
@@ -103,6 +42,12 @@ export function createAuthoritativeSnapshot({
       },
     ]),
   )
+  const receivers = Object.fromEntries(
+    ['audio', 'video'].map((kind) => [
+      kind,
+      { ready_state: peerStatus.receivers[kind].readyState },
+    ]),
+  )
   const snapshot = {
     session_id: sessionId,
     session_epoch: sessionEpoch,
@@ -111,12 +56,7 @@ export function createAuthoritativeSnapshot({
     active_fault: activeFault,
     connection: { ...peerStatus.connection },
     tracks,
-    receivers: Object.fromEntries(
-      ['audio', 'video'].map((kind) => [
-        kind,
-        { ready_state: peerStatus.receivers[kind].readyState },
-      ]),
-    ),
+    receivers,
     media_progression: progression,
     metrics: {
       outbound_bitrate_kbps: metrics.outboundBitrateKbps,
@@ -129,7 +69,12 @@ export function createAuthoritativeSnapshot({
       ),
     },
   }
-  snapshot.health = statusAndScore(snapshot.connection, tracks, progression)
+  snapshot.health = evaluateCallHealth({
+    connection: snapshot.connection,
+    tracks,
+    receivers,
+    progression,
+  }).health
   return sanitizeValue(snapshot)
 }
 

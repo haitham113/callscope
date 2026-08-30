@@ -161,7 +161,7 @@ export function createLabController(store) {
         throw new DOMException('Stale session.', 'AbortError')
       }
       media = createdMedia
-      store.addTimeline('System', 'Generated media online', 'Animated canvas video and patterned Web Audio tracks are live.')
+      store.recordSystemEvent('Generated media online', 'Animated canvas video and patterned Web Audio tracks are live.')
 
       const createdPeers = await createLoopbackPeerService(media.stream, signal)
       if (!activeSessionMatches(sessionId)) {
@@ -175,7 +175,7 @@ export function createLabController(store) {
       media.startRemoteAudioMeter(peers.remoteStream, (level) => {
         if (activeSessionMatches(sessionId)) store.audioLevel = level
       })
-      store.addTimeline('System', 'Loopback peers connected', 'Offer, answer, and ICE candidates were exchanged in page memory.')
+      store.recordSystemEvent('Loopback peers connected', 'Offer, answer, and ICE candidates were exchanged in page memory.')
 
       sampler = createStatsSampler({
         outboundPeer: peers.outboundPeer,

@@ -4,7 +4,7 @@
 
 CallScope is a browser-based workspace where a developer and an AI agent inspect, diagnose, repair, and verify a live WebRTC call together.
 
-Instead of asking an agent to interpret screenshots or copied logs, CallScope is being built to expose the active page's peer-connection, media-track, sender, and health state through focused WebMCP tools. The current Milestone 2 implementation proves the complete manual disabled-audio rescue against the same shared runtime, including human-only approval and fresh authoritative verification. Production WebMCP tools are not registered yet.
+Instead of asking an agent to interpret screenshots or copied logs, CallScope is being built to expose the active page's peer-connection, media-track, sender, and health state through focused WebMCP tools. The current implementation proves the complete manual disabled-audio rescue against a shared runtime, including human-only approval and fresh authoritative verification. Production WebMCP tools are not registered yet.
 
 > Observe → Diagnose → Explain → Propose repair → Human approval → Apply → Verify
 
@@ -54,7 +54,7 @@ The default demonstration uses a real, deterministic WebRTC loopback session:
 5. The shared runtime stages an `enable_audio_track` recovery with evidence, risk, reversibility, and expected result.
 6. CallScope waits for the human to approve or reject the recovery.
 7. After approval, click the visually secondary **Apply manually** fallback. Approval itself does not change media.
-8. CallScope compares the failure baseline with the recovered call.
+8. CallScope compares the failure baseline with a fresh post-repair sample.
 9. The agent generates a sanitized incident report.
 
 The intended result is visible and measurable: **Critical → Recovering → Healthy**.
@@ -74,9 +74,9 @@ WebMCP allows the agent to:
 
 A traditional backend MCP integration would require duplicated session state, authentication, and a separate transport for rapidly changing browser metrics. Ordinary browser automation would have to infer technical state from UI text. WebMCP lets the agent work directly with the page's existing application logic while the page remains the shared human-agent workspace.
 
-## Planned WebMCP Tools
+## WebMCP Tools
 
-The locked specification defines exactly seven focused tools. They are intentionally not registered in Milestone 2; registration and agent-facing adapters are Milestone 4 work.
+The locked specification defines exactly seven focused tools. They are intentionally not registered in the current build.
 
 | Tool | Type | Purpose |
 | --- | --- | --- |
@@ -107,7 +107,7 @@ The allowlisted recovery sets the track back to `enabled: true`.
 
 ### Constrained video bitrate
 
-This secondary scenario is specified but intentionally not implemented in Milestone 2.
+This secondary scenario is specified but intentionally not implemented in the current build.
 
 CallScope uses `RTCRtpSender.setParameters()` to apply a deliberately low `maxBitrate` to the video encoding.
 
@@ -167,7 +167,7 @@ CallScope makes the collaboration visible in the application rather than hiding 
 - Verification
 - Report generation
 
-The incident report summarizes the symptom, root cause, sanitized evidence, approved repair, verification result, and remaining recommendations. It can be viewed in the page and downloaded as Markdown.
+The incident report summarizes the symptom, root cause, sanitized evidence, approved repair, verification result, and remaining recommendations. It is rendered on screen; optional Markdown download is not implemented.
 
 ## Architecture
 

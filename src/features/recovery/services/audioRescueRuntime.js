@@ -7,6 +7,21 @@ import {
 } from './recoveryPlanService.js'
 import { verifyDisabledAudioRecovery } from './recoveryVerification.js'
 
+const RECOVERY_SAMPLE_ATTEMPTS = 3
+
+function canAwaitFreshAudioProgression(snapshot) {
+  const audio = snapshot.tracks.audio
+  return (
+    audio.enabled === true &&
+    audio.ready_state === 'live' &&
+    audio.attached === true &&
+    snapshot.connection.outbound === 'connected' &&
+    snapshot.connection.inbound === 'connected' &&
+    (snapshot.media_progression.outbound_audio !== true ||
+      snapshot.media_progression.inbound_audio !== true)
+  )
+}
+
 export function createAudioRescueRuntime({
   store,
   captureSnapshot,
@@ -56,7 +71,7 @@ export function createAudioRescueRuntime({
 
   async function resetScenario() {
     if (!store.activeFault && store.state === 'healthy') return { ok: true, snapshot: store.latestSnapshot }
-    if (!['critical', 'diagnosing', 'awaiting_approval', 'degraded'].includes(store.state)) {
+    if (!['critical', 'awaiting_approval', 'degraded'].includes(store.state)) {
       const result = errorResult(
         'INVALID_STATE_TRANSITION',
         'The current lab state cannot be reset as an active scenario.',
@@ -197,8 +212,20 @@ export function createAudioRescueRuntime({
     }
 
     store.beginRecovery()
-    setAudioEnabled(true)
-    const actualAfter = readAudioState()
+    let actualAfter
+    try {
+      setAudioEnabled(true)
+      actualAfter = readAudioState()
+    } catch {
+      const result = errorResult(
+        'RECOVERY_FAILED',
+        'The browser could not apply the approved audio-track recovery.',
+        'Reset or restart the lab before another attempt.',
+        false,
+      )
+      store.failRecovery(result)
+      return result
+    }
     if (
       actualAfter.enabled !== true ||
       actualAfter.ready_state !== 'live' ||
@@ -210,24 +237,40 @@ export function createAudioRescueRuntime({
         'Reset or restart the lab before another attempt.',
         false,
       )
-      store.recordOperationError(result, 'Recovery failed')
+      store.failRecovery(result)
       return result
     }
     store.markRecoveryApplied(actualBefore, actualAfter)
-    const recoveredSnapshot = await captureSnapshot({ stabilize: true })
-    const verification = verifyDisabledAudioRecovery({
-      failureSnapshot: store.failureBaseline,
-      recoveredSnapshot,
-    })
-    store.completeVerification(verification, recoveredSnapshot)
-    const report = createIncidentReport({
-      sessionId: store.sessionId,
-      startedAt: store.startedAt,
-      diagnosis: store.diagnosis,
-      plan: store.recoveryPlan,
-      verification,
-    })
-    store.setIncidentReport(report)
+    let recoveredSnapshot
+    let verification
+    let report
+    try {
+      for (let attempt = 0; attempt < RECOVERY_SAMPLE_ATTEMPTS; attempt += 1) {
+        recoveredSnapshot = await captureSnapshot({ stabilize: true })
+        if (!canAwaitFreshAudioProgression(recoveredSnapshot)) break
+      }
+      verification = verifyDisabledAudioRecovery({
+        failureSnapshot: store.failureBaseline,
+        recoveredSnapshot,
+      })
+      store.completeVerification(verification, recoveredSnapshot)
+      report = createIncidentReport({
+        sessionId: store.sessionId,
+        startedAt: store.startedAt,
+        diagnosis: store.diagnosis,
+        plan: store.recoveryPlan,
+        verification,
+      })
+      store.setIncidentReport(report)
+    } catch {
+      const result = errorResult(
+        'VERIFICATION_INCOMPLETE',
+        'The audio repair was applied, but fresh authoritative verification did not complete.',
+        'Reset the scenario or restart the lab before another recovery.',
+      )
+      store.failRecovery(result)
+      return result
+    }
     return {
       ok: verification.verdict === 'recovered',
       action: plan.action,
