@@ -22,6 +22,8 @@ logs/
 .eslintcache
 .swc/
 *.tsbuildinfo
+playwright-report/
+test-results/
 
 # Local data
 data/
