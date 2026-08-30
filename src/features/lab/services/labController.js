@@ -141,7 +141,7 @@ export function createLabController(store) {
       throw new Error('Real audio/video counters did not progress before the startup deadline.')
     } catch (error) {
       const cancelled = error?.name === 'AbortError'
-      const receipt = await cleanupResources()
+      const receipt = await cleanupResources(error?.cleanupReceipt)
       if (!cancelled && store.sessionId === sessionId && store.state === 'starting') {
         store.recordCleanup(receipt)
         store.markFailed(error?.message || 'The demo lab could not start.')
@@ -149,7 +149,7 @@ export function createLabController(store) {
     }
   }
 
-  async function cleanupResources() {
+  async function cleanupResources(startupMediaReceipt = null) {
     if (cleanupPromise) return cleanupPromise
     cleanupPromise = (async () => {
       startAbortController?.abort()
@@ -170,7 +170,7 @@ export function createLabController(store) {
           }
       const mediaReceipt = media
         ? await media.cleanup()
-        : {
+        : startupMediaReceipt ?? {
             generated_tracks_total: 0,
             generated_tracks_ended: 0,
             audio_context_state: 'not-created',
@@ -189,6 +189,7 @@ export function createLabController(store) {
         peerReceipt.remote_tracks_ended === peerReceipt.remote_tracks_total &&
         mediaReceipt.generated_tracks_ended === mediaReceipt.generated_tracks_total &&
         ['closed', 'not-created'].includes(mediaReceipt.audio_context_state) &&
+        mediaReceipt.audio_nodes_disconnected &&
         !mediaReceipt.animation_active &&
         !mediaReceipt.animation_frame_pending &&
         !mediaReceipt.audio_meter_active &&

@@ -11,39 +11,25 @@ export async function createDemoMedia(canvas) {
   ensureMediaCapabilities(canvas)
 
   const context = canvas.getContext('2d')
-  const audioContext = new AudioContext({ latencyHint: 'interactive' })
-  const destination = audioContext.createMediaStreamDestination()
-  const carrier = audioContext.createOscillator()
-  const pulse = audioContext.createOscillator()
-  const pulseDepth = audioContext.createGain()
-  const outputGain = audioContext.createGain()
+  let audioContext = null
+  let destination = null
+  let carrier = null
+  let pulse = null
+  let pulseDepth = null
+  let outputGain = null
+  let videoStream = null
+  let generatedStream = null
   let animationFrameId = null
   let audioMeterIntervalId = null
   let remoteAudioSource = null
   let analyser = null
-  let animationRunning = true
+  let animationRunning = false
   let nodesDisconnected = false
+  let carrierStarted = false
+  let pulseStarted = false
+  let cleanupPromise = null
 
-  carrier.type = 'sine'
-  carrier.frequency.value = 523.25
-  pulse.type = 'sine'
-  pulse.frequency.value = 1.6
-  pulseDepth.gain.value = 0.045
-  outputGain.gain.value = 0.065
-  pulse.connect(pulseDepth)
-  pulseDepth.connect(outputGain.gain)
-  carrier.connect(outputGain)
-  outputGain.connect(destination)
-  carrier.start()
-  pulse.start()
-
-  if (audioContext.state !== 'running') await audioContext.resume()
-  if (audioContext.state !== 'running') {
-    throw new Error(`AudioContext did not enter running state (state: ${audioContext.state}).`)
-  }
-
-  canvas.width = 1280
-  canvas.height = 720
+  if (!context) throw new Error('Canvas 2D rendering is unavailable in this browser.')
 
   function drawFrame(now) {
     if (!animationRunning) return
@@ -103,12 +89,55 @@ export async function createDemoMedia(canvas) {
     animationFrameId = requestAnimationFrame(drawFrame)
   }
 
-  animationFrameId = requestAnimationFrame(drawFrame)
-  const videoStream = canvas.captureStream(30)
-  const generatedStream = new MediaStream([
-    ...destination.stream.getAudioTracks(),
-    ...videoStream.getVideoTracks(),
-  ])
+  try {
+    audioContext = new AudioContext({ latencyHint: 'interactive' })
+    destination = audioContext.createMediaStreamDestination()
+    carrier = audioContext.createOscillator()
+    pulse = audioContext.createOscillator()
+    pulseDepth = audioContext.createGain()
+    outputGain = audioContext.createGain()
+
+    carrier.type = 'sine'
+    carrier.frequency.value = 523.25
+    pulse.type = 'sine'
+    pulse.frequency.value = 1.6
+    pulseDepth.gain.value = 0.045
+    outputGain.gain.value = 0.065
+    pulse.connect(pulseDepth)
+    pulseDepth.connect(outputGain.gain)
+    carrier.connect(outputGain)
+    outputGain.connect(destination)
+    carrier.start()
+    carrierStarted = true
+    pulse.start()
+    pulseStarted = true
+
+    if (audioContext.state !== 'running') await audioContext.resume()
+    if (audioContext.state !== 'running') {
+      throw new Error(
+        `AudioContext did not enter running state (state: ${audioContext.state}).`,
+      )
+    }
+
+    canvas.width = 1280
+    canvas.height = 720
+    animationRunning = true
+    animationFrameId = requestAnimationFrame(drawFrame)
+    videoStream = canvas.captureStream(30)
+    generatedStream = new MediaStream([
+      ...destination.stream.getAudioTracks(),
+      ...videoStream.getVideoTracks(),
+    ])
+  } catch (error) {
+    const cleanupReceipt = await cleanup()
+    const startupError = new Error(
+      error?.message || 'Generated media could not be created.',
+      { cause: error },
+    )
+    startupError.name = error?.name || 'Error'
+    startupError.cleanupReceipt = cleanupReceipt
+    throw startupError
+  }
 
   function startRemoteAudioMeter(remoteStream, onLevel) {
     const audioTracks = remoteStream.getAudioTracks()
@@ -134,42 +163,79 @@ export async function createDemoMedia(canvas) {
   }
 
   async function cleanup() {
-    if (audioMeterIntervalId !== null) clearInterval(audioMeterIntervalId)
-    audioMeterIntervalId = null
-    animationRunning = false
-    if (animationFrameId !== null) cancelAnimationFrame(animationFrameId)
-    animationFrameId = null
+    if (cleanupPromise) return cleanupPromise
+    cleanupPromise = (async () => {
+      if (audioMeterIntervalId !== null) clearInterval(audioMeterIntervalId)
+      audioMeterIntervalId = null
+      animationRunning = false
+      if (animationFrameId !== null) cancelAnimationFrame(animationFrameId)
+      animationFrameId = null
 
-    remoteAudioSource?.disconnect()
-    analyser?.disconnect()
-    try {
-      carrier.stop()
-      pulse.stop()
-    } catch {
-      // Oscillator stop is one-shot; cleanup remains idempotent.
-    }
-    carrier.disconnect()
-    pulse.disconnect()
-    pulseDepth.disconnect()
-    outputGain.disconnect()
-    destination.disconnect()
-    nodesDisconnected = true
+      function disconnect(node) {
+        if (!node) return true
+        try {
+          node.disconnect()
+          return true
+        } catch {
+          return false
+        }
+      }
 
-    const generatedTracks = generatedStream.getTracks()
-    generatedTracks.forEach((track) => track.stop())
-    if (audioContext.state !== 'closed') await audioContext.close()
+      if (carrierStarted) {
+        try {
+          carrier.stop()
+        } catch {
+          // Oscillator stop is one-shot; cleanup remains idempotent.
+        }
+      }
+      if (pulseStarted) {
+        try {
+          pulse.stop()
+        } catch {
+          // Oscillator stop is one-shot; cleanup remains idempotent.
+        }
+      }
+      nodesDisconnected = [
+        remoteAudioSource,
+        analyser,
+        carrier,
+        pulse,
+        pulseDepth,
+        outputGain,
+        destination,
+      ]
+        .map(disconnect)
+        .every(Boolean)
 
-    return {
-      generated_tracks_total: generatedTracks.length,
-      generated_tracks_ended: generatedTracks.filter(
-        (track) => track.readyState === 'ended',
-      ).length,
-      audio_context_state: audioContext.state,
-      audio_nodes_disconnected: nodesDisconnected,
-      animation_active: animationRunning,
-      animation_frame_pending: animationFrameId !== null,
-      audio_meter_active: audioMeterIntervalId !== null,
-    }
+      const generatedTracks = [
+        ...new Set([
+          ...(generatedStream?.getTracks() ?? []),
+          ...(destination?.stream.getTracks() ?? []),
+          ...(videoStream?.getTracks() ?? []),
+        ]),
+      ]
+      generatedTracks.forEach((track) => track.stop())
+      if (audioContext && audioContext.state !== 'closed') {
+        try {
+          await audioContext.close()
+        } catch {
+          // The authoritative state below makes a failed close visible.
+        }
+      }
+
+      return {
+        generated_tracks_total: generatedTracks.length,
+        generated_tracks_ended: generatedTracks.filter(
+          (track) => track.readyState === 'ended',
+        ).length,
+        audio_context_state: audioContext?.state ?? 'not-created',
+        audio_nodes_disconnected: nodesDisconnected,
+        animation_active: animationRunning,
+        animation_frame_pending: animationFrameId !== null,
+        audio_meter_active: audioMeterIntervalId !== null,
+      }
+    })()
+    return cleanupPromise
   }
 
   return {

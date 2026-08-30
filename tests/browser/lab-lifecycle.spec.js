@@ -83,3 +83,78 @@ test('ending during startup cancels partial resources without late health mutati
   await expect(page.getByTestId('health-status')).toContainText('Ended')
   expect(errors).toEqual([])
 })
+
+test('cleans media created before a partial startup failure and then restarts', async ({ page }) => {
+  const errors = collectBrowserErrors(page)
+  await page.addInitScript(() => {
+    const resources = (window.__partialStartupResources = {
+      audioContexts: [],
+      animationFrames: new Set(),
+    })
+    const NativeAudioContext = window.AudioContext
+    window.AudioContext = class extends NativeAudioContext {
+      constructor(...args) {
+        super(...args)
+        resources.audioContexts.push(this)
+      }
+    }
+
+    const nativeRequestAnimationFrame = window.requestAnimationFrame
+    const nativeCancelAnimationFrame = window.cancelAnimationFrame
+    window.requestAnimationFrame = (callback) => {
+      let animationFrameId
+      animationFrameId = nativeRequestAnimationFrame((timestamp) => {
+        resources.animationFrames.delete(animationFrameId)
+        callback(timestamp)
+      })
+      resources.animationFrames.add(animationFrameId)
+      return animationFrameId
+    }
+    window.cancelAnimationFrame = (animationFrameId) => {
+      resources.animationFrames.delete(animationFrameId)
+      return nativeCancelAnimationFrame(animationFrameId)
+    }
+
+    const nativeCaptureStream = window.HTMLCanvasElement.prototype.captureStream
+    window.HTMLCanvasElement.prototype.captureStream = function captureStreamOnce() {
+      window.HTMLCanvasElement.prototype.captureStream = nativeCaptureStream
+      throw new Error('Injected captureStream startup failure')
+    }
+  })
+  await page.goto('/')
+
+  await page.getByTestId('start-demo').click()
+  await expect(page.getByTestId('health-status')).toContainText('Failed')
+  const failureReceipt = page.getByTestId('cleanup-receipt')
+  await expect(failureReceipt).toContainText('All tracked browser resources released')
+  await expect(failureReceipt).toContainText('Generated tracks 1/1 ended')
+  await expect(failureReceipt).toContainText('AudioContext closed')
+  await expect(failureReceipt).toContainText('Animation stopped')
+  await expect
+    .poll(() =>
+      page.evaluate(() => ({
+        activeAudioContexts: window.__partialStartupResources.audioContexts.filter(
+          (context) => context.state !== 'closed',
+        ).length,
+        activeAnimationFrames:
+          window.__partialStartupResources.animationFrames.size,
+      })),
+    )
+    .toEqual({ activeAudioContexts: 0, activeAnimationFrames: 0 })
+
+  await startAndExpectHealthy(page)
+  await page.getByTestId('end-reset').click()
+  await expect(page.getByTestId('health-status')).toContainText('Ended')
+  await expect
+    .poll(() =>
+      page.evaluate(() => ({
+        contextStates: window.__partialStartupResources.audioContexts.map(
+          (context) => context.state,
+        ),
+        activeAnimationFrames:
+          window.__partialStartupResources.animationFrames.size,
+      })),
+    )
+    .toEqual({ contextStates: ['closed', 'closed'], activeAnimationFrames: 0 })
+  expect(errors).toEqual([])
+})
