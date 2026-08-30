@@ -1,3 +1,5 @@
+import { serviceError } from '../../../shared/errors/serviceErrors.js'
+
 function waitForConnected(outboundPeer, inboundPeer, timeoutMs, signal) {
   return new Promise((resolve, reject) => {
     let timeoutId
@@ -48,7 +50,7 @@ function waitForConnected(outboundPeer, inboundPeer, timeoutMs, signal) {
 
 export async function createLoopbackPeerService(sourceStream, signal) {
   if (!window.RTCPeerConnection) {
-    throw new Error('RTCPeerConnection is unavailable in this browser.')
+    throw serviceError('MEDIA_CAPABILITY_UNSUPPORTED')
   }
 
   const outboundPeer = new RTCPeerConnection({ iceServers: [] })
@@ -56,13 +58,11 @@ export async function createLoopbackPeerService(sourceStream, signal) {
   const remoteStream = new MediaStream()
   const listeners = []
   const candidateErrors = []
+  let cleanupErrors = []
   const candidateOperations = new Set()
   const pendingForOutbound = []
   const pendingForInbound = []
-  const expectedRemoteTrackKinds = new Set(
-    sourceStream.getTracks().map((track) => track.kind),
-  )
-  let cleaned = false
+  const observedRemoteTrackIds = new Set()
 
   function listen(target, type, handler) {
     target.addEventListener(type, handler)
@@ -103,6 +103,7 @@ export async function createLoopbackPeerService(sourceStream, signal) {
   listen(outboundPeer, 'icecandidate', relayCandidate(inboundPeer, pendingForInbound))
   listen(inboundPeer, 'icecandidate', relayCandidate(outboundPeer, pendingForOutbound))
   listen(inboundPeer, 'track', (event) => {
+    observedRemoteTrackIds.add(event.track.id)
     if (!remoteStream.getTracks().some((track) => track.id === event.track.id)) {
       remoteStream.addTrack(event.track)
     }
@@ -124,11 +125,8 @@ export async function createLoopbackPeerService(sourceStream, signal) {
     await waitForConnected(outboundPeer, inboundPeer, 12_000, signal)
     await settleCandidateOperations()
   } catch (error) {
-    listeners.splice(0).forEach((remove) => remove())
-    remoteStream.getTracks().forEach((track) => track.stop())
-    outboundPeer.close()
-    inboundPeer.close()
-    await settleCandidateOperations()
+    error.peerCleanupReceipt = await cleanup()
+    error.retryPeerCleanup = cleanup
     throw error
   }
 
@@ -199,7 +197,7 @@ export async function createLoopbackPeerService(sourceStream, signal) {
       peer_connections_closed: [outboundPeer, inboundPeer].filter(
         (peer) => peer.connectionState === 'closed',
       ).length,
-      remote_tracks_expected: expectedRemoteTrackKinds.size,
+      remote_tracks_expected: observedRemoteTrackIds.size,
       remote_tracks_total: remoteTracks.length,
       remote_tracks_ended: remoteTracks.filter(
         (track) => track.readyState === 'ended',
@@ -207,18 +205,25 @@ export async function createLoopbackPeerService(sourceStream, signal) {
       listeners_removed: listeners.length === 0,
       candidate_exchange_errors: candidateErrors.length,
       candidate_operations_pending: candidateOperations.size,
+      cleanup_errors: cleanupErrors.length,
     }
   }
 
   async function cleanup() {
-    if (cleaned) return createCleanupReceipt()
-    cleaned = true
-    listeners.splice(0).forEach((remove) => remove())
+    cleanupErrors = []
+    listeners.splice(0).forEach((remove) => {
+      try { remove() } catch (error) { cleanupErrors.push(error.name) }
+    })
     const remoteTracks = collectRemoteTracks()
-    remoteTracks.forEach((track) => track.stop())
-    outboundPeer.getSenders().forEach((sender) => sender.track?.stop())
-    outboundPeer.close()
-    inboundPeer.close()
+    remoteTracks.forEach((track) => {
+      try { track.stop() } catch (error) { cleanupErrors.push(error.name) }
+    })
+    outboundPeer.getSenders().forEach((sender) => {
+      try { sender.track?.stop() } catch (error) { cleanupErrors.push(error.name) }
+    })
+    for (const peer of [outboundPeer, inboundPeer]) {
+      try { peer.close() } catch (error) { cleanupErrors.push(error.name) }
+    }
     await settleCandidateOperations()
     await Promise.resolve()
 

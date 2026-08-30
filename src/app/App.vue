@@ -7,6 +7,7 @@ import { detectWebMcpSupport } from '../features/webmcp/webMcpReadiness.js'
 
 const store = useLabStore()
 const controller = createLabController(store)
+const human = controller.human
 const sourceCanvas = ref(null)
 const remoteVideo = ref(null)
 const startPending = ref(false)
@@ -35,7 +36,9 @@ const {
   incidentReport,
 } = storeToRefs(store)
 
-const canStart = computed(() => ['idle', 'ended', 'failed'].includes(state.value))
+const canStart = computed(() =>
+  ['idle', 'ended', 'failed'].includes(state.value) && lastCleanupReceipt.value?.complete !== false,
+)
 const healthTone = computed(() => {
   if (state.value === 'healthy') return 'healthy'
   if (['critical', 'failed'].includes(state.value)) return 'critical'
@@ -53,7 +56,10 @@ const sessionShort = computed(() => sessionId.value?.slice(0, 8) ?? 'not started
 const endLabel = computed(() => (state.value === 'ended' ? 'Reset lab' : 'End / Reset'))
 const activeCall = computed(() => !['idle', 'starting', 'ended', 'failed'].includes(state.value))
 const canBreakAudio = computed(() => state.value === 'healthy' && !activeFault.value)
-const canResetScenario = computed(() => Boolean(activeFault.value) && !['recovering', 'verifying'].includes(state.value))
+const canResetScenario = computed(() =>
+  (Boolean(activeFault.value) || state.value === 'critical') &&
+  !['idle', 'starting', 'ended', 'failed'].includes(state.value),
+)
 const canDiagnose = computed(() => state.value === 'critical' && activeFault.value === 'disabled_audio')
 const approved = computed(() => recoveryPlan.value?.status === 'approved')
 const diagnosisFinding = computed(() => diagnosis.value?.findings?.[0] ?? null)
@@ -108,14 +114,14 @@ async function startLab() {
   if (!canStart.value || startPending.value) return
   startPending.value = true
   try {
-    await controller.start(sourceCanvas.value, remoteVideo.value)
+    await human.start(sourceCanvas.value, remoteVideo.value)
   } finally {
     startPending.value = false
   }
 }
 
 async function endOrReset() {
-  await controller.end()
+  await human.end()
 }
 
 async function runOperation(operation) {
@@ -129,27 +135,27 @@ async function runOperation(operation) {
 }
 
 function breakAudio() {
-  return runOperation(() => controller.breakAudioTrack())
+  return runOperation(() => human.breakAudioTrack())
 }
 
-function resetScenario() {
-  return runOperation(() => controller.resetScenario())
+async function resetScenario() {
+  await human.resetScenario()
 }
 
 function diagnoseAndStage() {
-  return runOperation(() => controller.diagnoseAndStageRecovery())
+  return runOperation(() => human.diagnoseAndStageRecovery())
 }
 
 function approveRecovery() {
-  controller.approvePlan()
+  human.approvePlan()
 }
 
 function rejectRecovery() {
-  controller.rejectPlan()
+  human.rejectPlan()
 }
 
 function applyManually() {
-  return runOperation(() => controller.applyApprovedRecovery())
+  return runOperation(() => human.applyApprovedRecovery())
 }
 
 function evidenceLabel(value) {
@@ -268,7 +274,7 @@ onBeforeUnmount(() => void controller.dispose())
             <button class="danger-button" type="button" data-testid="break-audio" :disabled="!canBreakAudio || operationPending" @click="breakAudio">
               Break audio track
             </button>
-            <button v-if="canResetScenario" class="secondary-button" type="button" data-testid="reset-scenario" :disabled="operationPending" @click="resetScenario">
+            <button v-if="canResetScenario" class="secondary-button" type="button" data-testid="reset-scenario" @click="resetScenario">
               Reset scenario to healthy
             </button>
           </div>
@@ -523,7 +529,7 @@ onBeforeUnmount(() => void controller.dispose())
 
     <footer>
       <p>Generated media stays in this page. No recording, raw IP display, or external media service.</p>
-      <span>Milestone 2 · Manual audio rescue</span>
+      <span>Milestone 3 · Safety-hardened manual rescue</span>
     </footer>
   </main>
 </template>

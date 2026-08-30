@@ -68,7 +68,7 @@ export function createStatsSampler({ outboundPeer, inboundPeer, onSample, onErro
   let activeSamplePromise = null
   let stopped = false
 
-  function sample() {
+  function sample({ notify = true } = {}) {
     if (stopped) return Promise.resolve(null)
     if (activeSamplePromise) return activeSamplePromise
 
@@ -79,7 +79,7 @@ export function createStatsSampler({ outboundPeer, inboundPeer, onSample, onErro
           inboundPeer.getStats(),
         ])
         const snapshot = normalizeStats(outboundReport, inboundReport)
-        if (!stopped) onSample?.(snapshot)
+        if (!stopped && notify) onSample?.(snapshot)
         return snapshot
       } finally {
         if (activeSamplePromise === operation) activeSamplePromise = null

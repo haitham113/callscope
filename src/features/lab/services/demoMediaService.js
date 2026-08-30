@@ -1,9 +1,11 @@
+import { serviceError } from '../../../shared/errors/serviceErrors.js'
+
 function ensureMediaCapabilities(canvas) {
   if (!canvas?.captureStream) {
-    throw new Error('Canvas capture is unavailable in this browser.')
+    throw serviceError('MEDIA_CAPABILITY_UNSUPPORTED')
   }
   if (!window.AudioContext) {
-    throw new Error('Web Audio is unavailable in this browser.')
+    throw serviceError('MEDIA_CAPABILITY_UNSUPPORTED')
   }
 }
 
@@ -29,7 +31,7 @@ export async function createDemoMedia(canvas) {
   let pulseStarted = false
   let cleanupPromise = null
 
-  if (!context) throw new Error('Canvas 2D rendering is unavailable in this browser.')
+  if (!context) throw serviceError('MEDIA_CAPABILITY_UNSUPPORTED')
 
   function drawFrame(now) {
     if (!animationRunning) return
@@ -135,7 +137,9 @@ export async function createDemoMedia(canvas) {
       { cause: error },
     )
     startupError.name = error?.name || 'Error'
+    startupError.code = error?.code
     startupError.cleanupReceipt = cleanupReceipt
+    startupError.retryMediaCleanup = cleanup
     throw startupError
   }
 
@@ -163,7 +167,11 @@ export async function createDemoMedia(canvas) {
   }
 
   async function cleanup() {
-    if (cleanupPromise) return cleanupPromise
+    if (cleanupPromise) {
+      const existingReceipt = await cleanupPromise
+      if (mediaCleanupComplete(existingReceipt)) return existingReceipt
+      cleanupPromise = null
+    }
     cleanupPromise = (async () => {
       if (audioMeterIntervalId !== null) clearInterval(audioMeterIntervalId)
       audioMeterIntervalId = null
@@ -195,17 +203,19 @@ export async function createDemoMedia(canvas) {
           // Oscillator stop is one-shot; cleanup remains idempotent.
         }
       }
-      nodesDisconnected = [
-        remoteAudioSource,
-        analyser,
-        carrier,
-        pulse,
-        pulseDepth,
-        outputGain,
-        destination,
-      ]
-        .map(disconnect)
-        .every(Boolean)
+      if (!nodesDisconnected) {
+        nodesDisconnected = [
+          remoteAudioSource,
+          analyser,
+          carrier,
+          pulse,
+          pulseDepth,
+          outputGain,
+          destination,
+        ]
+          .map(disconnect)
+          .every(Boolean)
+      }
 
       const generatedTracks = [
         ...new Set([
@@ -235,7 +245,18 @@ export async function createDemoMedia(canvas) {
         audio_meter_active: audioMeterIntervalId !== null,
       }
     })()
-    return cleanupPromise
+    const receipt = await cleanupPromise
+    if (!mediaCleanupComplete(receipt)) cleanupPromise = null
+    return receipt
+  }
+
+  function mediaCleanupComplete(receipt) {
+    return receipt.generated_tracks_ended === receipt.generated_tracks_total &&
+      ['closed', 'not-created'].includes(receipt.audio_context_state) &&
+      receipt.audio_nodes_disconnected &&
+      !receipt.animation_active &&
+      !receipt.animation_frame_pending &&
+      !receipt.audio_meter_active
   }
 
   return {

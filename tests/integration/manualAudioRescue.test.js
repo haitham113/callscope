@@ -156,20 +156,17 @@ describe('complete manual disabled-audio rescue workflow', () => {
     expect(store.recoveryPlan).toBeNull()
   })
 
-  it('rejects reset during diagnosis before mutating the actual audio track', async () => {
+  it('allows the human to reset safely from a diagnostic state', async () => {
     const { store, audio, runtime } = await harness()
     await runtime.breakAudioTrack()
     store.beginDiagnosis()
 
     const result = await runtime.resetScenario()
 
-    expect(result).toMatchObject({
-      ok: false,
-      error: { code: 'INVALID_STATE_TRANSITION' },
-    })
-    expect(audio.enabled).toBe(false)
-    expect(store.state).toBe('diagnosing')
-    expect(store.activeFault).toBe('disabled_audio')
+    expect(result).toMatchObject({ ok: true })
+    expect(audio.enabled).toBe(true)
+    expect(store.state).toBe('healthy')
+    expect(store.activeFault).toBeNull()
   })
 
   it('returns to Critical without mutation when the approved executor fails', async () => {

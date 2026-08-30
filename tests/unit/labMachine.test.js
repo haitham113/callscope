@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { assertTransition, canTransition } from '../../src/features/lab/labMachine.js'
+import {
+  LAB_TRANSITIONS,
+  assertTransition,
+  canTransition,
+} from '../../src/features/lab/labMachine.js'
 
 describe('lab state machine', () => {
   it('allows the Milestone 1 lifecycle and restart path', () => {
@@ -19,5 +23,24 @@ describe('lab state machine', () => {
   it('supports partial-start failure and a clean retry', () => {
     expect(canTransition('starting', 'failed')).toBe(true)
     expect(canTransition('failed', 'starting')).toBe(true)
+  })
+
+  it('exports the complete immutable transition table', () => {
+    expect(Object.keys(LAB_TRANSITIONS)).toEqual([
+      'idle',
+      'starting',
+      'healthy',
+      'degraded',
+      'critical',
+      'diagnosing',
+      'awaiting_approval',
+      'recovering',
+      'verifying',
+      'ended',
+      'failed',
+    ])
+    expect(LAB_TRANSITIONS.idle).toEqual(['starting'])
+    expect(Object.isFrozen(LAB_TRANSITIONS)).toBe(true)
+    expect(Object.isFrozen(LAB_TRANSITIONS.idle)).toBe(true)
   })
 })

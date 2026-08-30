@@ -4,7 +4,7 @@
 
 CallScope is a browser-based workspace where a developer and an AI agent inspect, diagnose, repair, and verify a live WebRTC call together.
 
-Instead of asking an agent to interpret screenshots or copied logs, CallScope is being built to expose the active page's peer-connection, media-track, sender, and health state through focused WebMCP tools. The current implementation proves the complete manual disabled-audio rescue against a shared runtime, including human-only approval and fresh authoritative verification. Production WebMCP tools are not registered yet.
+Instead of asking an agent to interpret screenshots or copied logs, CallScope is being built to expose the active page's peer-connection, media-track, sender, and health state through focused WebMCP tools. The current implementation proves the complete safety-hardened manual disabled-audio rescue against a shared runtime, including human-only approval, bound and abortable operations, recursive sanitization, stable errors, and fresh authoritative verification. Production WebMCP tools are not registered yet.
 
 > Observe → Diagnose → Explain → Propose repair → Human approval → Apply → Verify
 
@@ -131,6 +131,9 @@ Recovery approval is enforced by application state, not by instructions to the a
 - Rejected, expired, stale, mismatched, incompatible, or reused plans fail safely.
 - Every user, agent, and system action appears in the shared timeline.
 - Reset remains available to the human.
+- Session UUIDs, monotonic epochs, and fault revisions prevent late work from owning a newer incident.
+- Startup, diagnostic, recovery-verification, and wait operations are abortable and revalidated before committing results.
+- Human and future-agent controllers expose separate capability sets; the agent set has no approval method.
 
 Calling `apply_recovery_action` before approval returns a structured `PLAN_NOT_APPROVED` error and leaves the media state unchanged.
 
@@ -259,6 +262,10 @@ The critical browser checks are:
 - Verification produces measurable before-and-after evidence.
 - Authoritative snapshots and reports contain no raw IP address or SDP.
 - Ending and restarting clears session-owned tracks, peers, timers, and state.
+- Reset/end cancels startup, diagnosis, recovery, and verification without late mutation.
+- Cleanup receipts assert real peers, tracks, AudioContext, animation, samplers, listeners, ICE work, and timers.
+- Nested success/error/report data recursively removes IP addresses, SDP, device labels, and secret-bearing fields.
+- Expired, stale, mismatched, incompatible, rejected, unknown, and used diagnoses/plans fail without media mutation.
 
 ## Browser Support
 

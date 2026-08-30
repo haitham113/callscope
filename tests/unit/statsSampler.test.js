@@ -49,4 +49,20 @@ describe('stats sampler lifecycle', () => {
     await sampler.stop()
     vi.useRealTimers()
   })
+
+  it('can return an owned sample without publishing it before caller revalidation', async () => {
+    const samples = []
+    const report = new Map()
+    const sampler = createStatsSampler({
+      outboundPeer: { getStats: async () => report },
+      inboundPeer: { getStats: async () => report },
+      onSample: (sample) => samples.push(sample),
+    })
+
+    const sample = await sampler.sample({ notify: false })
+
+    expect(sample).toBeTruthy()
+    expect(samples).toEqual([])
+    await sampler.stop()
+  })
 })

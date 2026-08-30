@@ -1,5 +1,8 @@
 import { defineStore } from 'pinia'
 import { assertTransition } from '../labMachine.js'
+import { sanitizeValue } from '../../diagnostics/services/sanitizer.js'
+import { assertRecoveryTransition } from '../../recovery/recoveryMachine.js'
+import { errorResult } from '../../../shared/errors/serviceErrors.js'
 
 function emptyMetrics() {
   return {
@@ -30,23 +33,34 @@ function emptyEvidenceChecks() {
   }
 }
 
-function appendTimeline(store, actor, title, detail, evidence = null) {
+function appendTimeline(
+  store,
+  actor,
+  title,
+  detail,
+  evidence = null,
+  { type = 'state_changed', affectsIncident = true } = {},
+) {
+  const sanitized = sanitizeValue({ title, detail, evidence })
+  if (affectsIncident) store.incidentRevision += 1
   store.timeline.push({
     id: crypto.randomUUID(),
     actor,
-    title,
-    detail,
-    evidence,
+    type,
+    title: sanitized.title,
+    detail: sanitized.detail,
+    evidence: evidence === null ? null : sanitized.evidence,
     createdAt: new Date().toISOString(),
+    incidentRevision: store.incidentRevision,
   })
 }
 
-function appendUserTimeline(store, title, detail, evidence = null) {
-  appendTimeline(store, 'User', title, detail, evidence)
+function appendUserTimeline(store, title, detail, evidence = null, options) {
+  appendTimeline(store, 'User', title, detail, evidence, options)
 }
 
-function appendSystemTimeline(store, title, detail, evidence = null) {
-  appendTimeline(store, 'System', title, detail, evidence)
+function appendSystemTimeline(store, title, detail, evidence = null, options) {
+  appendTimeline(store, 'System', title, detail, evidence, options)
 }
 
 export const useLabStore = defineStore('lab', {
@@ -54,6 +68,7 @@ export const useLabStore = defineStore('lab', {
     sessionId: null,
     sessionEpoch: 0,
     faultRevision: 0,
+    incidentRevision: 0,
     state: 'idle',
     healthStatus: 'Ready',
     healthScore: null,
@@ -87,6 +102,7 @@ export const useLabStore = defineStore('lab', {
       this.sessionId = crypto.randomUUID()
       this.sessionEpoch += 1
       this.faultRevision = 0
+      this.incidentRevision = 0
       this.state = 'starting'
       this.healthStatus = 'Starting'
       this.healthScore = null
@@ -128,6 +144,7 @@ export const useLabStore = defineStore('lab', {
       this.healthStatus = 'Healthy'
       this.healthScore = 100
       this.healthyBaseline = baseline
+      this.latestSnapshot = baseline
       appendSystemTimeline(this, 'Healthy baseline captured', 'Two peers, live tracks, and progressing real media counters verified.')
     },
     beginAudioFault() {
@@ -196,6 +213,7 @@ export const useLabStore = defineStore('lab', {
     },
     approvePlan(planId) {
       if (this.recoveryPlan?.id !== planId || this.recoveryPlan.status !== 'staged') return false
+      assertRecoveryTransition(this.recoveryPlan.status, 'approved')
       this.recoveryPlan.status = 'approved'
       this.recoveryPlan.approved_at = new Date().toISOString()
       appendUserTimeline(
@@ -208,6 +226,7 @@ export const useLabStore = defineStore('lab', {
     },
     rejectPlan(planId) {
       if (this.recoveryPlan?.id !== planId || this.recoveryPlan.status !== 'staged') return false
+      assertRecoveryTransition(this.recoveryPlan.status, 'rejected')
       this.recoveryPlan.status = 'rejected'
       this.recoveryPlan.rejected_at = new Date().toISOString()
       this.transition('critical')
@@ -216,6 +235,24 @@ export const useLabStore = defineStore('lab', {
         'Recovery rejected',
         'The staged plan was rejected. The media track remains disabled.',
         { plan_id: planId, media_mutated: false },
+      )
+      return true
+    },
+    expirePlan(planId) {
+      if (
+        this.recoveryPlan?.id !== planId ||
+        !['staged', 'approved'].includes(this.recoveryPlan.status)
+      ) return false
+      assertRecoveryTransition(this.recoveryPlan.status, 'expired')
+      this.recoveryPlan.status = 'expired'
+      if (this.state === 'awaiting_approval') this.transition('critical')
+      this.healthStatus = 'Critical'
+      appendSystemTimeline(
+        this,
+        'Recovery plan expired',
+        'The 90-second approval window elapsed without a valid application.',
+        { plan_id: planId, media_mutated: false },
+        { type: 'plan_expired' },
       )
       return true
     },
@@ -230,6 +267,7 @@ export const useLabStore = defineStore('lab', {
       this.recordOperationError(result, 'Recovery failed')
     },
     markRecoveryApplied(previousState, newState) {
+      assertRecoveryTransition(this.recoveryPlan.status, 'applied')
       this.recoveryPlan.status = 'applied'
       this.recoveryPlan.applied_at = new Date().toISOString()
       this.transition('verifying')
@@ -244,6 +282,7 @@ export const useLabStore = defineStore('lab', {
     completeVerification(verification, snapshot) {
       this.verification = verification
       this.latestSnapshot = snapshot
+      assertRecoveryTransition(this.recoveryPlan.status, 'verified')
       this.recoveryPlan.status = 'verified'
       this.recoveryPlan.verified_at = new Date().toISOString()
       const nextState =
@@ -270,10 +309,11 @@ export const useLabStore = defineStore('lab', {
         'Incident report generated',
         'A sanitized on-screen report was built from the diagnosis and verified evidence.',
         { report_id: report.id, raw_ip_addresses_excluded: true, sdp_excluded: true },
+        { type: 'report_generated', affectsIncident: false },
       )
     },
     beginScenarioReset() {
-      this.transition('verifying')
+      if (this.state !== 'verifying') this.transition('verifying')
       this.faultRevision += 1
       this.activeFault = null
       this.failureBaseline = null
@@ -297,14 +337,36 @@ export const useLabStore = defineStore('lab', {
       this.healthScore = snapshot.health.score
       appendSystemTimeline(
         this,
-        'Scenario reset to healthy',
-        'The actual audio track is enabled and fresh media progression was confirmed.',
+        nextState === 'healthy' ? 'Scenario reset to healthy' : 'Scenario reset verification incomplete',
+        nextState === 'healthy'
+          ? 'The actual audio track is enabled and fresh media progression was confirmed.'
+          : 'The actual audio track is enabled, but fresh evidence did not meet healthy requirements.',
         { snapshot_hash: snapshot.snapshot_hash, audio_enabled: snapshot.tracks.audio.enabled },
       )
     },
+    failScenarioReset(result, actualAudio) {
+      if (this.state !== 'verifying') this.transition('verifying')
+      this.faultRevision += 1
+      this.activeFault = actualAudio?.enabled === false ? 'disabled_audio' : null
+      this.failureBaseline = null
+      this.diagnosis = null
+      this.recoveryPlan = null
+      this.verification = null
+      this.incidentReport = null
+      this.transition('critical')
+      this.healthStatus = 'Critical'
+      this.recordOperationError(result, 'Scenario reset failed')
+    },
     recordOperationError(result, title = 'Operation rejected') {
-      this.error = `${result.error.code}: ${result.error.message}`
-      appendSystemTimeline(this, title, result.error.message, { error: result.error })
+      const sanitized = sanitizeValue(result)
+      this.error = `${sanitized.error.code}: ${sanitized.error.message}`
+      appendSystemTimeline(
+        this,
+        title,
+        sanitized.error.message,
+        { error: sanitized.error },
+        { type: 'operation_failed' },
+      )
     },
     markFailed(message, title = 'Lab startup failed', receipt = null) {
       if (this.state !== 'failed') this.transition('failed')
@@ -337,18 +399,25 @@ export const useLabStore = defineStore('lab', {
       this.lastCleanupReceipt = receipt
     },
     markEnded(receipt) {
-      if (this.state !== 'ended') this.transition('ended')
-      this.healthStatus = 'Ended'
+      const cleanupComplete = Boolean(receipt?.complete)
+      const nextState = cleanupComplete ? 'ended' : 'failed'
+      if (this.state !== nextState) this.transition(nextState)
+      this.healthStatus = cleanupComplete ? 'Ended' : 'Failed'
       this.healthScore = null
       this.endedAt = new Date().toISOString()
-      const cleanupComplete = Boolean(receipt?.complete)
       this.setCleanupEvidence(receipt)
+      if (!cleanupComplete) {
+        const result = errorResult('CLEANUP_INCOMPLETE')
+        this.error = `${result.error.code}: ${result.error.message}`
+      }
       appendSystemTimeline(
         this,
         cleanupComplete ? 'Lab resources released' : 'Lab cleanup incomplete',
         cleanupComplete
           ? 'Cleanup evidence was captured before browser references were discarded.'
           : 'One or more tracked browser resources did not confirm release.',
+        cleanupComplete ? null : { error: errorResult('CLEANUP_INCOMPLETE').error },
+        { type: cleanupComplete ? 'lab_ended' : 'operation_failed' },
       )
     },
     recordCleanup(receipt) {
@@ -357,6 +426,7 @@ export const useLabStore = defineStore('lab', {
     resetToIdle() {
       if (this.state !== 'idle') this.transition('idle')
       this.sessionId = null
+      this.incidentRevision = 0
       this.state = 'idle'
       this.healthStatus = 'Ready'
       this.healthScore = null
@@ -381,6 +451,12 @@ export const useLabStore = defineStore('lab', {
     },
     recordSystemEvent(title, detail, evidence = null) {
       appendSystemTimeline(this, title, detail, evidence)
+    },
+    recordInspectionEvent(title, detail, evidence = null) {
+      appendSystemTimeline(this, title, detail, evidence, {
+        type: 'inspection_performed',
+        affectsIncident: false,
+      })
     },
   },
 })

@@ -2,18 +2,19 @@ import { sanitizeValue } from '../../diagnostics/services/sanitizer.js'
 
 export function createIncidentReport({
   sessionId,
+  incidentRevision,
   startedAt,
   diagnosis,
   plan,
   verification,
   now = () => new Date(),
-  createId = () => crypto.randomUUID(),
 }) {
   const finding = diagnosis.findings[0]
   const recovered = verification.verdict === 'recovered'
   return sanitizeValue({
-    id: createId(),
+    id: `incident-${sessionId}-${incidentRevision}`,
     session_id: sessionId,
+    incident_revision: incidentRevision,
     started_at: startedAt,
     generated_at: now().toISOString(),
     symptom: 'Remote audio became silent after the demo audio fault was introduced.',

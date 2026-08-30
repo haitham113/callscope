@@ -1,4 +1,5 @@
 import { AUDIO_RECOVERY_ACTION } from '../../diagnostics/services/diagnosticRules.js'
+import { errorResult } from '../../../shared/errors/serviceErrors.js'
 
 export const PLAN_LIFETIME_MS = 90_000
 
@@ -6,15 +7,12 @@ export function createRecoveryPlan({
   diagnosis,
   reason,
   expectedResult,
+  action = AUDIO_RECOVERY_ACTION,
   now = () => Date.now(),
   createId = () => crypto.randomUUID(),
 }) {
-  if (!diagnosis.allowed_actions.includes(AUDIO_RECOVERY_ACTION)) {
-    return errorResult(
-      'ACTION_NOT_ALLOWED',
-      'The diagnosis does not allow the requested recovery action.',
-      'Capture a fresh diagnosis for the active fault.',
-    )
+  if (action !== AUDIO_RECOVERY_ACTION || !diagnosis.allowed_actions.includes(action)) {
+    return errorResult('ACTION_NOT_ALLOWED')
   }
   const createdAt = now()
   return {
@@ -26,7 +24,7 @@ export function createRecoveryPlan({
       fault_revision: diagnosis.fault_revision,
       diagnosis_id: diagnosis.id,
       snapshot_hash: diagnosis.snapshot_hash,
-      action: AUDIO_RECOVERY_ACTION,
+      action,
       reason,
       expected_result: expectedResult,
       risk: 'low',
@@ -42,17 +40,7 @@ export function createRecoveryPlan({
   }
 }
 
-export function errorResult(code, message, suggestedNextStep, recoverable = true) {
-  return {
-    ok: false,
-    error: {
-      code,
-      message,
-      recoverable,
-      suggested_next_step: suggestedNextStep,
-    },
-  }
-}
+export { errorResult }
 
 export function validatePlanForApplication({
   plan,
@@ -65,35 +53,38 @@ export function validatePlanForApplication({
   now = Date.now(),
 }) {
   if (!plan) {
-    return errorResult('PLAN_NOT_FOUND', 'No recovery plan is staged.', 'Stage a compatible recovery plan first.')
+    return errorResult('PLAN_NOT_FOUND')
   }
   if (plan.status === 'applied' || plan.status === 'verified') {
-    return errorResult('PLAN_ALREADY_USED', 'This recovery plan has already been used.', 'Diagnose the current state again if another repair is needed.')
+    return errorResult('PLAN_ALREADY_USED')
+  }
+  if (plan.status === 'expired') {
+    return errorResult('PLAN_EXPIRED')
   }
   if (plan.status !== 'approved') {
-    return errorResult('PLAN_NOT_APPROVED', 'The recovery plan requires explicit user approval.', 'Ask the user to approve or reject the staged plan.')
+    return errorResult('PLAN_NOT_APPROVED')
   }
   if (Date.parse(plan.expires_at) <= now) {
-    return errorResult('PLAN_EXPIRED', 'The recovery plan has expired.', 'Capture a fresh diagnosis and stage a new plan.')
+    return errorResult('PLAN_EXPIRED')
   }
   if (plan.session_id !== sessionId || plan.session_epoch !== sessionEpoch) {
-    return errorResult('SESSION_MISMATCH', 'The recovery plan belongs to a different lab session.', 'Stage a plan for the active session.')
+    return errorResult('SESSION_MISMATCH')
   }
   if (plan.fault_revision !== faultRevision || plan.snapshot_hash !== snapshotHash) {
-    return errorResult('DIAGNOSIS_STALE', 'The live fault state no longer matches the staged plan.', 'Run diagnostics again against a fresh snapshot.')
+    return errorResult('DIAGNOSIS_STALE')
   }
   if (plan.action !== AUDIO_RECOVERY_ACTION) {
-    return errorResult('ACTION_NOT_ALLOWED', 'The recovery action is not allowlisted for this milestone.', 'Use enable_audio_track for a confirmed disabled-audio diagnosis.')
+    return errorResult('ACTION_NOT_ALLOWED')
   }
   if (
     actualAudio?.enabled !== false ||
     actualAudio?.ready_state !== 'live' ||
     actualAudio?.attached !== true
   ) {
-    return errorResult('DIAGNOSIS_STALE', 'The outbound audio track no longer matches the diagnosed fault.', 'Inspect and diagnose the current call state again.')
+    return errorResult('DIAGNOSIS_STALE')
   }
   if (connection?.outbound !== 'connected' || connection?.inbound !== 'connected') {
-    return errorResult('RECOVERY_FAILED', 'Both peer connections must be connected before audio recovery.', 'Reset the scenario or restart the lab.', false)
+    return errorResult('RECOVERY_FAILED')
   }
   return { ok: true }
 }
