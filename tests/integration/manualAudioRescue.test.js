@@ -139,6 +139,60 @@ describe('complete manual disabled-audio rescue workflow', () => {
     expect(store.state).toBe('healthy')
   })
 
+  it('keeps WebMCP application, fresh comparison, and report generation explicitly sequenced', async () => {
+    const { store, audio, runtime } = await harness()
+    await runtime.breakAudioTrack()
+    const diagnosis = await runtime.runAgentDiagnostics({
+      sessionId: store.sessionId,
+      symptom: 'silent_audio',
+      sampleDurationMs: 1000,
+    })
+    const staged = runtime.stageAgentRecoveryPlan({
+      sessionId: store.sessionId,
+      diagnosisId: diagnosis.diagnosis.id,
+      action: 'enable_audio_track',
+      reason: 'The authoritative outbound audio track is disabled.',
+      expectedResult: 'Restore outbound audio on the existing sender.',
+    })
+
+    expect((await runtime.applyRecoveryAction({
+      sessionId: store.sessionId,
+      planId: staged.plan.id,
+      publishReport: false,
+    })).error.code).toBe('PLAN_NOT_APPROVED')
+    expect(audio.enabled).toBe(false)
+
+    runtime.approvePlan(staged.plan.id)
+    expect(audio.enabled).toBe(false)
+    const applied = await runtime.applyRecoveryAction({
+      sessionId: store.sessionId,
+      planId: staged.plan.id,
+      publishReport: false,
+    })
+    expect(applied).toMatchObject({
+      ok: true,
+      action: 'enable_audio_track',
+      stabilization_wait_ms: 1150,
+    })
+    expect(store.incidentReport).toBeNull()
+
+    const compared = await runtime.compareToFailureBaseline({
+      sessionId: store.sessionId,
+      planId: staged.plan.id,
+      sampleDurationMs: 1000,
+    })
+    expect(compared).toMatchObject({ ok: true, verification: { verdict: 'recovered' } })
+    expect(store.incidentReport).toBeNull()
+
+    const report = runtime.generateIncidentReport({
+      sessionId: store.sessionId,
+      format: 'markdown',
+    })
+    expect(report).toMatchObject({ ok: true, report: { session_id: store.sessionId } })
+    expect(report.markdown).toContain('# CallScope Incident Report')
+    expect(store.incidentReport).toEqual(report.report)
+  })
+
   it('keeps the track disabled after rejection and resets the actual scenario', async () => {
     const { store, audio, runtime } = await harness()
     await runtime.breakAudioTrack()

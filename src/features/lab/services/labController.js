@@ -1,14 +1,20 @@
-import { evaluateHealthyEvidence, deriveMetrics } from '../../diagnostics/services/healthEngine.js'
+import {
+  deriveMetrics,
+  evaluateCallHealth,
+  evaluateHealthyEvidence,
+} from '../../diagnostics/services/healthEngine.js'
 import {
   createAuthoritativeSnapshot,
   hashSnapshot,
 } from '../../diagnostics/services/snapshotService.js'
 import { createAudioRescueRuntime } from '../../recovery/services/audioRescueRuntime.js'
 import { createStatsSampler } from '../../diagnostics/services/statsSampler.js'
+import { sanitizeValue } from '../../diagnostics/services/sanitizer.js'
 import { createCleanupQuarantine } from './cleanupQuarantine.js'
 import { createDemoMedia } from './demoMediaService.js'
 import { createLoopbackPeerService } from './loopbackPeerService.js'
 import { errorResult, resultFromError } from '../../../shared/errors/serviceErrors.js'
+import { suggestedToolsForContext } from '../../webmcp/toolWorkflow.js'
 
 function abortableDelay(milliseconds, signal) {
   return new Promise((resolve, reject) => {
@@ -183,7 +189,12 @@ export function createLabController(store) {
     commitEvidence(owner.sessionId)
   }
 
-  async function captureSnapshot({ stabilize, signal: operationSignal, owner }) {
+  async function captureSnapshot({
+    stabilize,
+    sampleDurationMs = 1150,
+    signal: operationSignal,
+    owner,
+  }) {
     const boundOwner = owner ?? {
       sessionId: store.sessionId,
       sessionEpoch: store.sessionEpoch,
@@ -191,12 +202,23 @@ export function createLabController(store) {
     }
     const signal = combinedSignal(operationSignal, sessionAbortController?.signal)
     assertOperationOwned(boundOwner, signal)
+    let startSnapshot = null
     if (stabilize) {
       await takeOwnedSample(boundOwner, signal)
-      await abortableDelay(1150, signal)
+      startSnapshot = await buildCurrentSnapshot(boundOwner, signal)
+      await abortableDelay(sampleDurationMs, signal)
     }
     await takeOwnedSample(boundOwner, signal)
-    return buildCurrentSnapshot(boundOwner, signal)
+    const snapshot = await buildCurrentSnapshot(boundOwner, signal)
+    if (startSnapshot) {
+      snapshot.sample_window = {
+        started_at: startSnapshot.captured_at,
+        ended_at: snapshot.captured_at,
+        requested_duration_ms: sampleDurationMs,
+        start_metrics: startSnapshot.metrics,
+      }
+    }
+    return snapshot
   }
 
   function observeActiveHealth(sessionId, result) {
@@ -576,11 +598,128 @@ export function createLabController(store) {
     rejectPlan: rescueRuntime.rejectPlan,
     applyApprovedRecovery: rescueRuntime.applyApprovedRecovery,
   })
+
+  function activeSessionResult(sessionId) {
+    if (!store.sessionId || ['idle', 'ended'].includes(store.state)) {
+      return errorResult('NO_ACTIVE_SESSION')
+    }
+    return store.sessionId === sessionId ? { ok: true } : errorResult('SESSION_MISMATCH')
+  }
+
+  function suggestedContextTools() {
+    return suggestedToolsForContext({
+      sessionId: store.sessionId,
+      state: store.state,
+      planStatus: store.recoveryPlan?.status,
+      hasVerification: Boolean(store.verification),
+      hasDiagnosis: Boolean(store.diagnosis),
+      activeFault: store.activeFault,
+    })
+  }
+
+  function getLabContext() {
+    return {
+      ok: true,
+      session_id: store.sessionId,
+      lab_state: store.state,
+      health_status: store.healthStatus,
+      active_fault: store.activeFault,
+      pending_plan_id: store.recoveryPlan?.id ?? null,
+      pending_plan_status: store.recoveryPlan?.status ?? null,
+      webmcp_supported: store.webMcpSupported,
+      limitations: store.sessionId ? [] : ['No active session is available; start the lab in CallScope.'],
+      suggested_next_tools: suggestedContextTools(),
+    }
+  }
+
+  function inspectCallState({ sessionId, detail = 'summary' } = {}) {
+    const session = activeSessionResult(sessionId)
+    if (!session.ok) return session
+    if (!peers) return errorResult('STATS_UNAVAILABLE')
+    const status = peers.getSanitizedStatus()
+    const tracks = Object.fromEntries(Object.entries(status.tracks).map(([kind, track]) => [
+      kind,
+      {
+        ready_state: track.readyState,
+        enabled: track.enabled,
+        attached: track.attached,
+      },
+    ]))
+    const receivers = Object.fromEntries(Object.entries(status.receivers).map(([kind, track]) => [
+      kind,
+      { ready_state: track.readyState },
+    ]))
+    const health = evaluateCallHealth({
+      connection: status.connection,
+      tracks,
+      receivers,
+      progression: store.latestSnapshot?.media_progression,
+    }).health
+    const common = {
+      ok: true,
+      session_id: store.sessionId,
+      detail,
+      snapshot_at: new Date().toISOString(),
+      health,
+      active_fault: store.activeFault,
+      suggested_next_tools: store.activeFault
+        ? ['run_call_diagnostics']
+        : ['get_lab_context'],
+    }
+    const connectionEvidence = {
+      connection: status.connection,
+      selected_candidate: { type: null, protocol: null, relayed: null },
+    }
+    const mediaEvidence = {
+      tracks,
+      senders: {
+        audio: { attached: tracks.audio.attached, max_bitrate_bps: null },
+        video: { attached: tracks.video.attached, max_bitrate_bps: null },
+      },
+      receivers,
+    }
+    const limitations = []
+    if (['summary', 'connection', 'all'].includes(detail)) {
+      limitations.push('Selected candidate type and protocol are unavailable in the current audio milestone.')
+    }
+    if (['summary', 'media', 'all'].includes(detail)) {
+      limitations.push('Sender bitrate limits are unavailable until the secondary bitrate milestone.')
+    }
+    return sanitizeValue({
+      ...common,
+      ...(detail === 'summary' ? { connection: status.connection, tracks } : {}),
+      ...(['connection', 'all'].includes(detail) ? connectionEvidence : {}),
+      ...(['media', 'all'].includes(detail) ? mediaEvidence : {}),
+      limitations,
+    })
+  }
+
   const agent = Object.freeze({
+    getLabContext,
+    inspectCallState,
     runDiagnostics: rescueRuntime.runAgentDiagnostics,
     stageRecoveryPlan: rescueRuntime.stageAgentRecoveryPlan,
-    applyRecoveryAction: rescueRuntime.applyRecoveryAction,
+    applyRecoveryAction(input) {
+      return rescueRuntime.applyRecoveryAction({ ...input, publishReport: false })
+    },
+    compareToFailureBaseline: rescueRuntime.compareToFailureBaseline,
     generateIncidentReport: rescueRuntime.generateIncidentReport,
+    captureToolInvocation() {
+      return Object.freeze({
+        sessionId: store.sessionId,
+        sessionEpoch: store.sessionEpoch,
+        faultRevision: store.faultRevision,
+      })
+    },
+    recordToolEvent(toolName, result, invocation) {
+      if (
+        invocation?.sessionId !== store.sessionId ||
+        invocation?.sessionEpoch !== store.sessionEpoch ||
+        invocation?.faultRevision !== store.faultRevision
+      ) return false
+      store.recordAgentToolEvent(toolName, result)
+      return true
+    },
   })
 
   return Object.freeze({ human, agent, dispose })

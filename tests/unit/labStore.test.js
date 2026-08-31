@@ -153,4 +153,30 @@ describe('lab store session reset', () => {
       title: 'Audio fault failed',
     })
   })
+
+  it('keeps canonical state and health status aligned when verification is refreshed', () => {
+    const store = useLabStore()
+    store.beginSession()
+    store.markHealthy({ captured_at: 'synthetic' })
+
+    store.refreshVerification(
+      { verdict: 'partially_recovered' },
+      { health: { score: 75 } },
+    )
+    expect(store).toMatchObject({
+      state: 'degraded',
+      healthStatus: 'Degraded',
+      healthScore: 75,
+    })
+
+    store.refreshVerification(
+      { verdict: 'not_recovered' },
+      { health: { score: 40 } },
+    )
+    expect(store).toMatchObject({
+      state: 'critical',
+      healthStatus: 'Critical',
+      healthScore: 40,
+    })
+  })
 })

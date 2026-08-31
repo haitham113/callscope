@@ -1,12 +1,16 @@
 import { diagnoseDisabledAudio } from '../../diagnostics/services/diagnosticRules.js'
 import { sanitizeValue } from '../../diagnostics/services/sanitizer.js'
-import { createIncidentReport } from '../../reports/services/reportService.js'
+import {
+  createIncidentReport,
+  createIncidentReportMarkdown,
+} from '../../reports/services/reportService.js'
 import { createOperationCoordinator } from '../../../shared/async/operationCoordinator.js'
 import { errorResult, resultFromError, serviceError } from '../../../shared/errors/serviceErrors.js'
 import { createRecoveryPlan, validatePlanForApplication } from './recoveryPlanService.js'
 import { verifyDisabledAudioRecovery } from './recoveryVerification.js'
 
 const RECOVERY_SAMPLE_ATTEMPTS = 3
+const DEFAULT_SAMPLE_DURATION_MS = 1150
 
 function canAwaitFreshAudioProgression(snapshot) {
   const audio = snapshot.tracks.audio
@@ -88,11 +92,12 @@ export function createAudioRescueRuntime({ store, captureSnapshot, readAudioStat
     if (!operations.isCurrent(operation)) throw serviceError('OPERATION_CANCELLED')
   }
 
-  async function captureOwned(operation, { stabilize, phase }) {
+  async function captureOwned(operation, { stabilize, phase, sampleDurationMs }) {
     assertOwned(operation)
     const snapshot = await captureSnapshot({
       stabilize,
       phase,
+      sampleDurationMs,
       signal: operation.signal,
       owner: { sessionId: operation.sessionId, sessionEpoch: operation.sessionEpoch, faultRevision: operation.faultRevision },
     })
@@ -150,7 +155,11 @@ export function createAudioRescueRuntime({ store, captureSnapshot, readAudioStat
     } finally { operations.finish(operation) }
   }
 
-  async function runDiagnosticsForActor({ sessionId = store.sessionId, symptom = 'silent_audio' } = {}, actor) {
+  async function runDiagnosticsForActor({
+    sessionId = store.sessionId,
+    symptom = 'silent_audio',
+    sampleDurationMs = DEFAULT_SAMPLE_DURATION_MS,
+  } = {}, actor) {
     const session = validateSession(sessionId)
     if (!session.ok) return reject(session, 'Diagnosis rejected')
     if (store.state !== 'critical' || store.activeFault !== 'disabled_audio' || symptom !== 'silent_audio') {
@@ -159,13 +168,23 @@ export function createAudioRescueRuntime({ store, captureSnapshot, readAudioStat
     const window = beginWindow('diagnostic', 'Diagnosis rejected')
     if (!window.ok) return window
     const { operation } = window
+    const metricsAtStart = store.latestSnapshot?.metrics ?? store.failureBaseline?.metrics ?? null
     store.beginDiagnosis(actor)
     try {
-      const snapshot = await captureOwned(operation, { stabilize: true, phase: 'diagnostic' })
+      const snapshot = await captureOwned(operation, {
+        stabilize: true,
+        phase: 'diagnostic',
+        sampleDurationMs,
+      })
       const diagnosis = diagnoseDisabledAudio(snapshot)
       assertOwned(operation)
       store.completeDiagnosis(diagnosis, snapshot, actor)
-      return success({ ok: true, diagnosis, snapshot })
+      return success({
+        ok: true,
+        diagnosis,
+        metrics_at_start: snapshot.sample_window?.start_metrics ?? metricsAtStart,
+        snapshot,
+      })
     } catch (error) {
       const result = failure(error, 'STATS_UNAVAILABLE')
       if (operations.isCurrent(operation)) {
@@ -300,14 +319,23 @@ export function createAudioRescueRuntime({ store, captureSnapshot, readAudioStat
     return report
   }
 
-  function generateIncidentReport({ sessionId = store.sessionId } = {}) {
+  function generateIncidentReport({ sessionId = store.sessionId, format = 'summary' } = {}) {
     const session = validateSession(sessionId)
     if (!session.ok) return reject(session, 'Report generation rejected')
     if (!store.diagnosis || !store.recoveryPlan || !store.verification) return reject(errorResult('VERIFICATION_INCOMPLETE'), 'Report generation rejected')
-    return success({ ok: true, report: getOrCreateIncidentReport() })
+    const report = getOrCreateIncidentReport()
+    return success({
+      ok: true,
+      report,
+      ...(format === 'markdown' ? { markdown: createIncidentReportMarkdown(report) } : {}),
+    })
   }
 
-  async function applyRecoveryAction({ sessionId = store.sessionId, planId } = {}) {
+  async function applyRecoveryAction({
+    sessionId = store.sessionId,
+    planId,
+    publishReport = true,
+  } = {}) {
     const initial = validateActivePlan({ sessionId, planId, snapshotHash: store.recoveryPlan?.snapshot_hash })
     if (!initial.ok) return reject(initial, 'Recovery application rejected')
     const window = beginWindow('verification', 'Recovery application rejected')
@@ -348,22 +376,29 @@ export function createAudioRescueRuntime({ store, captureSnapshot, readAudioStat
       store.markRecoveryApplied(actualBefore, actualAfter)
 
       let recoveredSnapshot
+      let stabilizationAttempts = 0
       for (let attempt = 0; attempt < RECOVERY_SAMPLE_ATTEMPTS; attempt += 1) {
-        recoveredSnapshot = await captureOwned(operation, { stabilize: true, phase: 'recovery_verification' })
+        stabilizationAttempts += 1
+        recoveredSnapshot = await captureOwned(operation, {
+          stabilize: true,
+          phase: 'recovery_verification',
+          sampleDurationMs: DEFAULT_SAMPLE_DURATION_MS,
+        })
         if (!canAwaitFreshAudioProgression(recoveredSnapshot)) break
       }
       const verification = verifyDisabledAudioRecovery({ failureSnapshot: store.failureBaseline, recoveredSnapshot })
       assertOwned(operation)
       store.completeVerification(verification, recoveredSnapshot)
-      const report = getOrCreateIncidentReport()
+      const report = publishReport ? getOrCreateIncidentReport() : null
       return success({
         ok: true,
         recovered: verification.verdict === 'recovered',
         action: plan.action,
         previous_state: actualBefore,
         new_state: actualAfter,
+        stabilization_wait_ms: stabilizationAttempts * DEFAULT_SAMPLE_DURATION_MS,
         verification,
-        report,
+        ...(report ? { report } : {}),
       })
     } catch (error) {
       const result = failure(error, mutated ? 'VERIFICATION_INCOMPLETE' : 'STATS_UNAVAILABLE')
@@ -385,6 +420,47 @@ export function createAudioRescueRuntime({ store, captureSnapshot, readAudioStat
 
   function applyApprovedRecovery(planId = store.recoveryPlan?.id) {
     return applyRecoveryAction({ sessionId: store.sessionId, planId })
+  }
+
+  async function compareToFailureBaseline({
+    sessionId = store.sessionId,
+    planId,
+    sampleDurationMs = 2000,
+  } = {}) {
+    const session = validateSession(sessionId)
+    if (!session.ok) return reject(session, 'Verification rejected')
+    const plan = store.recoveryPlan
+    if (!plan || plan.id !== planId) return reject(errorResult('PLAN_NOT_FOUND'), 'Verification rejected')
+    if (plan.session_id !== store.sessionId || plan.session_epoch !== store.sessionEpoch) {
+      return reject(errorResult('SESSION_MISMATCH'), 'Verification rejected')
+    }
+    if (plan.fault_revision !== store.faultRevision) {
+      return reject(errorResult('DIAGNOSIS_STALE'), 'Verification rejected')
+    }
+    if (plan.status !== 'verified' || !store.failureBaseline) {
+      return reject(errorResult('VERIFICATION_INCOMPLETE'), 'Verification rejected')
+    }
+    const window = beginWindow('verification', 'Verification rejected')
+    if (!window.ok) return window
+    const { operation } = window
+    try {
+      const snapshot = await captureOwned(operation, {
+        stabilize: true,
+        phase: 'comparison',
+        sampleDurationMs,
+      })
+      const verification = verifyDisabledAudioRecovery({
+        failureSnapshot: store.failureBaseline,
+        recoveredSnapshot: snapshot,
+      })
+      assertOwned(operation)
+      store.refreshVerification(verification, snapshot)
+      return success({ ok: true, verification, snapshot })
+    } catch (error) {
+      const result = failure(error, 'VERIFICATION_INCOMPLETE')
+      if (operations.isCurrent(operation)) store.recordOperationError(result, 'Verification failed')
+      return result
+    } finally { operations.finish(operation) }
   }
 
   async function resetScenario() {
@@ -437,6 +513,7 @@ export function createAudioRescueRuntime({ store, captureSnapshot, readAudioStat
     rejectPlan,
     applyRecoveryAction,
     applyApprovedRecovery,
+    compareToFailureBaseline,
     generateIncidentReport,
     cancelAll,
     hasActiveSamplingWindow: operations.hasActiveSamplingWindow,

@@ -345,6 +345,26 @@ export const useLabStore = defineStore('lab', {
         { verdict: verification.verdict, primary_checks: verification.primary_checks },
       )
     },
+    refreshVerification(verification, snapshot) {
+      this.verification = verification
+      this.latestSnapshot = snapshot
+      const nextState = verification.verdict === 'recovered'
+        ? 'healthy'
+        : verification.verdict === 'partially_recovered'
+          ? 'degraded'
+          : 'critical'
+      if (this.state !== nextState) {
+        if (this.state !== 'verifying') this.transition('verifying')
+        this.transition(nextState)
+      }
+      this.healthScore = snapshot.health.score
+      this.healthStatus = nextState === 'healthy'
+        ? 'Healthy'
+        : nextState === 'degraded'
+          ? 'Degraded'
+          : 'Critical'
+      this.incidentReport = null
+    },
     setIncidentReport(report) {
       this.incidentReport = report
       appendSystemTimeline(
@@ -504,6 +524,25 @@ export const useLabStore = defineStore('lab', {
         type: 'inspection_performed',
         affectsIncident: false,
       })
+    },
+    recordAgentToolEvent(toolName, result) {
+      appendTimeline(
+        this,
+        'Agent',
+        toolName,
+        result.ok
+          ? 'WebMCP tool completed against CallScope application services.'
+          : `WebMCP tool returned ${result.error?.code ?? 'a stable error'}.`,
+        {
+          ok: result.ok,
+          session_id: result.session_id ?? result.needed_ids?.session_id ?? null,
+          diagnosis_id: result.diagnosis_id ?? result.needed_ids?.diagnosis_id ?? null,
+          plan_id: result.plan_id ?? result.needed_ids?.plan_id ?? null,
+          report_id: result.report_id ?? result.needed_ids?.report_id ?? null,
+          error_code: result.error?.code ?? null,
+        },
+        { type: 'webmcp_tool_invoked', affectsIncident: false },
+      )
     },
   },
 })

@@ -673,7 +673,6 @@ a:focus-visible {
 .agent-prompt span { color: #9fc4ff; font-size: 8px; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; }
 .agent-prompt p { margin: 0; font-size: 11px; font-weight: 650; }
 .agent-prompt small { color: var(--text-faint); font-size: 8px; }
-.agent-prompt button { padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; color: var(--text-faint); background: rgba(255, 255, 255, 0.025); font-size: 9px; }
 
 footer { display: flex; justify-content: space-between; gap: 20px; padding: 20px 3px 0; color: var(--text-faint); font-size: 9px; }
 footer p { margin: 0; }
@@ -713,7 +712,6 @@ footer p { margin: 0; }
   .metric-grid { grid-template-columns: 1fr; }
   .verification-checks { grid-template-columns: 1fr; }
   .agent-prompt { grid-template-columns: auto 1fr; }
-  .agent-prompt button { display: none; }
   footer { display: grid; }
 }
 

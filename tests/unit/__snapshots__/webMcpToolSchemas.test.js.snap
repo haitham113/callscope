@@ -1,0 +1,194 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`WebMCP tool contracts > preserves the exact input schemas and annotations from the product specification 1`] = `
+[
+  {
+    "annotations": {
+      "readOnlyHint": true,
+    },
+    "inputSchema": {
+      "properties": {},
+      "type": "object",
+    },
+    "name": "get_lab_context",
+  },
+  {
+    "annotations": {
+      "readOnlyHint": true,
+    },
+    "inputSchema": {
+      "properties": {
+        "detail": {
+          "enum": [
+            "summary",
+            "media",
+            "connection",
+            "all",
+          ],
+          "type": "string",
+        },
+        "session_id": {
+          "type": "string",
+        },
+      },
+      "required": [
+        "session_id",
+      ],
+      "type": "object",
+    },
+    "name": "inspect_call_state",
+  },
+  {
+    "annotations": {
+      "readOnlyHint": true,
+    },
+    "inputSchema": {
+      "properties": {
+        "sample_duration_ms": {
+          "default": 2000,
+          "maximum": 5000,
+          "minimum": 1000,
+          "type": "integer",
+        },
+        "session_id": {
+          "type": "string",
+        },
+        "symptom": {
+          "enum": [
+            "silent_audio",
+            "poor_video",
+            "connection_problem",
+            "unknown",
+          ],
+          "type": "string",
+        },
+      },
+      "required": [
+        "session_id",
+        "symptom",
+      ],
+      "type": "object",
+    },
+    "name": "run_call_diagnostics",
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "readOnlyHint": false,
+    },
+    "inputSchema": {
+      "properties": {
+        "action": {
+          "enum": [
+            "enable_audio_track",
+            "restore_video_bitrate",
+            "reattach_generated_track",
+          ],
+          "type": "string",
+        },
+        "diagnosis_id": {
+          "type": "string",
+        },
+        "expected_result": {
+          "maxLength": 300,
+          "type": "string",
+        },
+        "reason": {
+          "maxLength": 500,
+          "type": "string",
+        },
+        "session_id": {
+          "type": "string",
+        },
+      },
+      "required": [
+        "session_id",
+        "diagnosis_id",
+        "action",
+        "reason",
+        "expected_result",
+      ],
+      "type": "object",
+    },
+    "name": "stage_recovery_plan",
+  },
+  {
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "readOnlyHint": false,
+    },
+    "inputSchema": {
+      "properties": {
+        "plan_id": {
+          "type": "string",
+        },
+        "session_id": {
+          "type": "string",
+        },
+      },
+      "required": [
+        "session_id",
+        "plan_id",
+      ],
+      "type": "object",
+    },
+    "name": "apply_recovery_action",
+  },
+  {
+    "annotations": {
+      "readOnlyHint": true,
+    },
+    "inputSchema": {
+      "properties": {
+        "plan_id": {
+          "type": "string",
+        },
+        "sample_duration_ms": {
+          "default": 2000,
+          "maximum": 5000,
+          "minimum": 1000,
+          "type": "integer",
+        },
+        "session_id": {
+          "type": "string",
+        },
+      },
+      "required": [
+        "session_id",
+        "plan_id",
+      ],
+      "type": "object",
+    },
+    "name": "compare_to_failure_baseline",
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "readOnlyHint": false,
+    },
+    "inputSchema": {
+      "properties": {
+        "format": {
+          "default": "summary",
+          "enum": [
+            "summary",
+            "markdown",
+          ],
+          "type": "string",
+        },
+        "session_id": {
+          "type": "string",
+        },
+      },
+      "required": [
+        "session_id",
+      ],
+      "type": "object",
+    },
+    "name": "generate_incident_report",
+  },
+]
+`;

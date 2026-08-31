@@ -39,3 +39,36 @@ export function createIncidentReport({
     },
   })
 }
+
+export function createIncidentReportMarkdown(report) {
+  return sanitizeValue([
+    '# CallScope Incident Report',
+    '',
+    `- Report: ${report.id}`,
+    `- Session: ${report.session_id}`,
+    `- Started: ${report.started_at}`,
+    `- Generated: ${report.generated_at}`,
+    '',
+    '## Symptom',
+    '',
+    report.symptom,
+    '',
+    '## Root cause',
+    '',
+    report.root_cause,
+    '',
+    '## Approved recovery',
+    '',
+    `${report.approved_recovery.action} (${report.approved_recovery.risk} risk, reversible: ${report.approved_recovery.reversible})`,
+    '',
+    '## Verification',
+    '',
+    `${report.verification_result.verdict}; health score delta ${report.verification_result.health_score_delta}.`,
+    '',
+    '## Remaining recommendation',
+    '',
+    report.remaining_recommendations[0],
+    '',
+    '_Generated media only. Raw IP addresses, SDP, and device labels are excluded._',
+  ].join('\n'))
+}

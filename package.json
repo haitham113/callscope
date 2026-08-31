@@ -9,7 +9,7 @@
     "preview": "vite preview --host 127.0.0.1",
     "lint": "eslint .",
     "test": "vitest run",
-    "test:e2e": "playwright test tests/browser/lab-lifecycle.spec.js tests/browser/manual-audio-rescue.spec.js tests/browser/milestone3-negative.spec.js",
+    "test:e2e": "playwright test tests/browser/lab-lifecycle.spec.js tests/browser/manual-audio-rescue.spec.js tests/browser/milestone3-negative.spec.js tests/browser/webmcp-audio-rescue.spec.js",
     "test:spikes": "playwright test tests/browser/risky-api-spikes.spec.js",
     "test:browser": "playwright test"
   },

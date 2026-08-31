@@ -7,6 +7,7 @@ import {
 } from '../../src/shared/errors/serviceErrors.js'
 
 const REQUIRED_CODES = [
+  'INVALID_TOOL_INPUT',
   'WEBMCP_UNSUPPORTED',
   'NO_ACTIVE_SESSION',
   'SESSION_MISMATCH',

@@ -4,7 +4,7 @@
 
 CallScope is a browser-based workspace where a developer and an AI agent inspect, diagnose, repair, and verify a live WebRTC call together.
 
-Instead of asking an agent to interpret screenshots or copied logs, CallScope is being built to expose the active page's peer-connection, media-track, sender, and health state through focused WebMCP tools. The current implementation proves the complete safety-hardened manual disabled-audio rescue against a shared runtime, including human-only approval, bound and abortable operations, recursive sanitization, stable errors, and fresh authoritative verification. Production WebMCP tools are not registered yet.
+Instead of asking an agent to interpret screenshots or copied logs, CallScope exposes the active page's peer-connection, media-track, sender, and health state through seven focused WebMCP tools. The current implementation completes the safety-hardened WebMCP disabled-audio rescue against the same runtime used by the manual controls, including human-only approval, bound and abortable operations, recursive sanitization, stable errors, and fresh authoritative verification.
 
 > Observe → Diagnose → Explain → Propose repair → Human approval → Apply → Verify
 
@@ -46,16 +46,20 @@ The default demonstration uses a real, deterministic WebRTC loopback session:
 
 1. Click **Start Demo Lab** and watch the generated call become healthy.
 2. Click **Break audio track** to disable the actual outbound audio track.
-3. Run **Diagnose & stage recovery** in the manual recovery drawer. The intended future agent prompt is:
+3. Send the suggested first agent prompt:
 
-   > Why is this call silent? Diagnose it and propose the safest repair.
+   > Why is this call silent? Diagnose it and stage the safest repair.
 
-4. CallScope samples the live call and identifies the disabled audio track.
-5. The shared runtime stages an `enable_audio_track` recovery with evidence, risk, reversibility, and expected result.
-6. CallScope waits for the human to approve or reject the recovery.
-7. After approval, click the visually secondary **Apply manually** fallback. Approval itself does not change media.
-8. CallScope compares the failure baseline with a fresh post-repair sample.
-9. The agent generates a sanitized incident report.
+4. The agent inspects and samples the live call, then identifies the disabled audio track.
+5. The agent stages an `enable_audio_track` recovery with evidence, risk, reversibility, and expected result.
+6. Approve or reject the plan in CallScope. Approval records application state only; media remains broken.
+7. After approval, send the displayed continuation:
+
+   > Approved. Apply the repair, verify recovery, and generate the report.
+
+8. The agent applies the approved repair, compares the failure baseline with a fresh post-repair sample, and generates the sanitized report.
+
+The visually secondary **Apply manually** control exercises the same shared runtime when WebMCP is unavailable.
 
 The intended result is visible and measurable: **Critical → Recovering → Healthy**.
 
@@ -76,7 +80,7 @@ A traditional backend MCP integration would require duplicated session state, au
 
 ## WebMCP Tools
 
-The locked specification defines exactly seven focused tools. They are intentionally not registered in the current build.
+CallScope registers exactly seven focused tools when `document.modelContext.registerTool()` is available.
 
 | Tool | Type | Purpose |
 | --- | --- | --- |
@@ -133,7 +137,7 @@ Recovery approval is enforced by application state, not by instructions to the a
 - Reset remains available to the human.
 - Session UUIDs, monotonic epochs, and fault revisions prevent late work from owning a newer incident.
 - Startup, diagnostic, recovery-verification, and wait operations are abortable and revalidated before committing results.
-- Human and future-agent controllers expose separate capability sets; the agent set has no approval method.
+- Human and agent controllers expose separate capability sets; the agent set has no approval method.
 
 Calling `apply_recovery_action` before approval returns a structured `PLAN_NOT_APPROVED` error and leaves the media state unchanged.
 
@@ -177,7 +181,7 @@ The incident report summarizes the symptom, root cause, sanitized evidence, appr
 ```mermaid
 flowchart TD
     H["Human interface"] --> S["Shared Vue and Pinia services"]
-    A["Future browser agent"] --> M["Planned WebMCP adapter"]
+    A["Browser agent"] --> M["WebMCP adapter"]
     M --> S
     S --> B["WebRTC, Web Audio, and Canvas APIs"]
     S --> U["Timeline, recovery, and report UI"]
@@ -246,6 +250,7 @@ The deployed WebMCP experience must be served over HTTPS.
 npm run test
 npm run build
 npm run test:e2e
+npm run test:spikes
 ```
 
 The browser suite also builds the production application before starting its
@@ -266,10 +271,12 @@ The critical browser checks are:
 - Cleanup receipts assert real peers, tracks, AudioContext, animation, samplers, listeners, ICE work, and timers.
 - Nested success/error/report data recursively removes IP addresses, SDP, device labels, and secret-bearing fields.
 - Expired, stale, mismatched, incompatible, rejected, unknown, and used diagnoses/plans fail without media mutation.
+- The exact seven WebMCP contracts register once, share one abort lifecycle, and cannot duplicate across remounts.
+- A narrow `modelContext` test double proves handler wiring while a real browser proves the underlying WebRTC mutation and verification path.
 
 ## Browser Support
 
-The complete agent experience requires a browser environment that supports WebMCP. CallScope feature-detects `document.modelContext` and displays a clear readiness status.
+The complete agent experience requires a browser environment that supports WebMCP. CallScope feature-detects `document.modelContext.registerTool`, registers through one isolated adapter, and displays a clear readiness status.
 
 When WebMCP is unavailable, the deterministic lab and manual controls remain usable, allowing the entire diagnostic and recovery workflow to be exercised without an agent.
 

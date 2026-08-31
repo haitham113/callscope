@@ -1,6 +1,7 @@
 import { sanitizeValue } from '../../features/diagnostics/services/sanitizer.js'
 
 export const ERROR_DEFINITIONS = Object.freeze({
+  INVALID_TOOL_INPUT: Object.freeze({ message: 'The WebMCP tool input is invalid.', recoverable: true, suggested_next_step: 'Retry with an input that matches the registered schema.' }),
   WEBMCP_UNSUPPORTED: Object.freeze({ message: 'WebMCP is unavailable in this browser.', recoverable: true, suggested_next_step: 'Use the manual controls or open CallScope in a supported browser.' }),
   NO_ACTIVE_SESSION: Object.freeze({ message: 'No active lab session is available.', recoverable: true, suggested_next_step: 'Start a new demo lab session.' }),
   SESSION_MISMATCH: Object.freeze({ message: 'The request belongs to a different lab session.', recoverable: true, suggested_next_step: 'Inspect the active session and retry with its session identifier.' }),

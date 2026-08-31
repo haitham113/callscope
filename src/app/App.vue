@@ -3,11 +3,12 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useLabStore } from '../features/lab/stores/labStore.js'
 import { createLabController } from '../features/lab/services/labController.js'
-import { detectWebMcpSupport } from '../features/webmcp/webMcpReadiness.js'
+import { registerCallScopeTools } from '../features/webmcp/toolRegistry.js'
 
 const store = useLabStore()
 const controller = createLabController(store)
 const human = controller.human
+let webMcpRegistration = null
 const sourceCanvas = ref(null)
 const remoteVideo = ref(null)
 const startPending = ref(false)
@@ -166,8 +167,15 @@ function evidenceLabel(value) {
   return value === null ? 'Unavailable' : String(value)
 }
 
-onMounted(() => store.setWebMcpSupport(detectWebMcpSupport()))
-onBeforeUnmount(() => void controller.dispose())
+onMounted(() => {
+  webMcpRegistration = registerCallScopeTools({ agent: controller.agent })
+  store.setWebMcpSupport(webMcpRegistration.supported)
+})
+onBeforeUnmount(() => {
+  webMcpRegistration?.dispose()
+  webMcpRegistration = null
+  void controller.dispose()
+})
 </script>
 
 <template>
@@ -526,14 +534,14 @@ onBeforeUnmount(() => void controller.dispose())
       <div>
         <span>Suggested agent prompt</span>
         <p>{{ approved ? '“Approved. Apply the repair, verify recovery, and generate the report.”' : '“Why is this call silent? Diagnose it and stage the safest repair.”' }}</p>
-        <small>Manual parity is active. Production WebMCP tools are intentionally not registered yet.</small>
+        <small v-if="webMcpSupported">Seven WebMCP tools are ready. Recovery approval remains human-only in CallScope.</small>
+        <small v-else>WebMCP is not detected. The complete manual recovery remains available.</small>
       </div>
-      <button type="button" disabled title="WebMCP tools are introduced in a later milestone">Copy later</button>
     </section>
 
     <footer>
       <p>Generated media stays in this page. No recording, raw IP display, or external media service.</p>
-      <span>Milestone 3 · Safety-hardened manual rescue</span>
+      <span>Milestone 4 · WebMCP audio rescue</span>
     </footer>
   </main>
 </template>
