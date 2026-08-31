@@ -63,14 +63,29 @@ function normalizeStats(outboundReport, inboundReport) {
   return snapshot
 }
 
-export function createStatsSampler({ outboundPeer, inboundPeer, onSample, onError }) {
+function abortableView(operation, signal) {
+  if (!signal) return operation
+  if (signal.aborted) return Promise.reject(new DOMException('Sampling was cancelled.', 'AbortError'))
+  return new Promise((resolve, reject) => {
+    function abort() {
+      reject(new DOMException('Sampling was cancelled.', 'AbortError'))
+    }
+    signal.addEventListener('abort', abort, { once: true })
+    operation.then(
+      (value) => { signal.removeEventListener('abort', abort); resolve(value) },
+      (error) => { signal.removeEventListener('abort', abort); reject(error) },
+    )
+  })
+}
+
+export function createStatsSampler({ outboundPeer, inboundPeer, onSample, onError, drainTimeoutMs = 2000 }) {
   let intervalId = null
   let activeSamplePromise = null
   let stopped = false
 
-  function sample({ notify = true } = {}) {
+  function sample({ notify = true, signal } = {}) {
     if (stopped) return Promise.resolve(null)
-    if (activeSamplePromise) return activeSamplePromise
+    if (activeSamplePromise) return abortableView(activeSamplePromise, signal)
 
     const operation = (async () => {
       try {
@@ -86,7 +101,7 @@ export function createStatsSampler({ outboundPeer, inboundPeer, onSample, onErro
       }
     })()
     activeSamplePromise = operation
-    return operation
+    return abortableView(operation, signal)
   }
 
   return {
@@ -103,11 +118,13 @@ export function createStatsSampler({ outboundPeer, inboundPeer, onSample, onErro
       stopped = true
       const pendingSample = activeSamplePromise
       if (pendingSample) {
-        try {
-          await pendingSample
-        } catch {
-          // Teardown waits for browser-owned sampling without hiding its final state.
-        }
+        await new Promise((resolve) => {
+          const timeoutId = setTimeout(resolve, drainTimeoutMs)
+          pendingSample.then(
+            () => { clearTimeout(timeoutId); resolve() },
+            () => { clearTimeout(timeoutId); resolve() },
+          )
+        })
       }
       return {
         sampler_active: false,

@@ -5,6 +5,7 @@ import {
 } from '../../diagnostics/services/snapshotService.js'
 import { createAudioRescueRuntime } from '../../recovery/services/audioRescueRuntime.js'
 import { createStatsSampler } from '../../diagnostics/services/statsSampler.js'
+import { createCleanupQuarantine } from './cleanupQuarantine.js'
 import { createDemoMedia } from './demoMediaService.js'
 import { createLoopbackPeerService } from './loopbackPeerService.js'
 import { errorResult, resultFromError } from '../../../shared/errors/serviceErrors.js'
@@ -27,6 +28,45 @@ function abortableDelay(milliseconds, signal) {
   })
 }
 
+function abortableOperation(operation, signal) {
+  if (!signal) return operation
+  if (signal.aborted) return Promise.reject(new DOMException('Operation cancelled.', 'AbortError'))
+  return new Promise((resolve, reject) => {
+    function onAbort() {
+      reject(new DOMException('Operation cancelled.', 'AbortError'))
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+    operation.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort)
+        resolve(value)
+      },
+      (error) => {
+        signal.removeEventListener('abort', onAbort)
+        reject(error)
+      },
+    )
+  })
+}
+
+function peerCleanupComplete(receipt) {
+  return receipt.peer_connections_closed === receipt.peer_connections_total &&
+    receipt.remote_tracks_total === receipt.remote_tracks_expected &&
+    receipt.remote_tracks_ended === receipt.remote_tracks_total &&
+    receipt.candidate_operations_pending === 0 &&
+    receipt.cleanup_errors === 0 &&
+    receipt.listeners_removed
+}
+
+function mediaCleanupComplete(receipt) {
+  return receipt.generated_tracks_ended === receipt.generated_tracks_total &&
+    ['closed', 'not-created'].includes(receipt.audio_context_state) &&
+    receipt.audio_nodes_disconnected &&
+    !receipt.animation_active &&
+    !receipt.animation_frame_pending &&
+    !receipt.audio_meter_active
+}
+
 export function createLabController(store) {
   let media = null
   let peers = null
@@ -38,11 +78,14 @@ export function createLabController(store) {
   let currentSample = null
   let remoteVideoElement = null
   let cleanupPromise = null
+  let startupMediaTask = null
+  let startupPeerTask = null
   let partialPeerCleanup = null
   let partialMediaCleanup = null
   let ending = false
   let consecutiveUnhealthySamples = 0
   let healthFailureScheduled = false
+  const staleCleanupQuarantine = createCleanupQuarantine()
 
   function activeSessionMatches(sessionId, sessionEpoch = store.sessionEpoch) {
     return (
@@ -132,7 +175,7 @@ export function createLabController(store) {
 
   async function takeOwnedSample(owner, signal) {
     assertOperationOwned(owner, signal)
-    const snapshot = await sampler.sample({ notify: false })
+    const snapshot = await sampler.sample({ notify: false, signal })
     assertOperationOwned(owner, signal)
     if (!snapshot) throw new Error('Authoritative WebRTC statistics are unavailable.')
     previousSample = currentSample
@@ -188,6 +231,14 @@ export function createLabController(store) {
   }
 
   async function start(canvas, videoElement) {
+    if (staleCleanupQuarantine.pendingCount() > 0) {
+      const orphanReceipt = await staleCleanupQuarantine.drain()
+      if (!orphanReceipt.complete) {
+        const result = errorResult('CLEANUP_INCOMPLETE')
+        store.recordOperationError(result, 'Lab start rejected')
+        return result
+      }
+    }
     if (store.lastCleanupReceipt?.complete === false) {
       const result = errorResult('CLEANUP_INCOMPLETE')
       store.recordOperationError(result, 'Lab start rejected')
@@ -213,9 +264,20 @@ export function createLabController(store) {
     ending = false
     consecutiveUnhealthySamples = 0
     healthFailureScheduled = false
+    let ownedMedia = null
+    let ownedPeers = null
+    let ownedSampler = null
 
     try {
-      const createdMedia = await createDemoMedia(canvas)
+      const mediaTask = {
+        sessionId,
+        sessionEpoch,
+        promise: createDemoMedia(canvas, signal),
+      }
+      startupMediaTask = mediaTask
+      const createdMedia = await mediaTask.promise
+      if (startupMediaTask === mediaTask) startupMediaTask = null
+      ownedMedia = createdMedia
       if (!activeSessionMatches(sessionId, sessionEpoch)) {
         await createdMedia.cleanup()
         throw new DOMException('Stale session.', 'AbortError')
@@ -223,7 +285,15 @@ export function createLabController(store) {
       media = createdMedia
       store.recordSystemEvent('Generated media online', 'Animated canvas video and patterned Web Audio tracks are live.')
 
-      const createdPeers = await createLoopbackPeerService(media.stream, signal)
+      const peerTask = {
+        sessionId,
+        sessionEpoch,
+        promise: createLoopbackPeerService(media.stream, signal),
+      }
+      startupPeerTask = peerTask
+      const createdPeers = await peerTask.promise
+      if (startupPeerTask === peerTask) startupPeerTask = null
+      ownedPeers = createdPeers
       if (!activeSessionMatches(sessionId, sessionEpoch)) {
         await createdPeers.cleanup()
         throw new DOMException('Stale session.', 'AbortError')
@@ -231,7 +301,8 @@ export function createLabController(store) {
       peers = createdPeers
       remoteVideoElement.srcObject = peers.remoteStream
       remoteVideoElement.muted = true
-      await remoteVideoElement.play()
+      await abortableOperation(remoteVideoElement.play(), signal)
+      assertOperationOwned(startupOwner, signal)
       media.startRemoteAudioMeter(peers.remoteStream, (level) => {
         if (activeSessionMatches(sessionId, sessionEpoch)) store.audioLevel = level
       })
@@ -251,10 +322,11 @@ export function createLabController(store) {
           observeActiveHealth(sessionId, null)
         },
       })
+      ownedSampler = sampler
 
       for (let attempt = 0; attempt < 12; attempt += 1) {
         assertOperationOwned(startupOwner, signal)
-        const sample = await sampler.sample({ notify: false })
+        const sample = await sampler.sample({ notify: false, signal })
         assertOperationOwned(startupOwner, signal)
         previousSample = currentSample
         currentSample = sample
@@ -273,6 +345,17 @@ export function createLabController(store) {
       throw new Error('Real audio/video counters did not progress before the startup deadline.')
     } catch (error) {
       const cancelled = error?.name === 'AbortError'
+      const stillCurrentSession = store.sessionId === sessionId && store.sessionEpoch === sessionEpoch
+      if (!stillCurrentSession) {
+        await cleanupStaleStartup({
+          media: ownedMedia,
+          peers: ownedPeers,
+          sampler: ownedSampler,
+          retryPeerCleanup: error?.retryPeerCleanup,
+          retryMediaCleanup: error?.retryMediaCleanup,
+        })
+        return errorResult('OPERATION_CANCELLED')
+      }
       partialPeerCleanup = error?.retryPeerCleanup ?? partialPeerCleanup
       partialMediaCleanup = error?.retryMediaCleanup ?? partialMediaCleanup
       const receipt = await cleanupResources(error?.cleanupReceipt)
@@ -288,6 +371,55 @@ export function createLabController(store) {
     }
   }
 
+  async function cleanupStaleStartup({
+    media: ownedMedia,
+    peers: ownedPeers,
+    sampler: ownedSampler,
+    retryPeerCleanup,
+    retryMediaCleanup,
+  }) {
+    return staleCleanupQuarantine.track(async () => {
+      const samplerReceipt = (ownedSampler ? await ownedSampler.stop() : null) ?? {
+        sampler_active: false,
+        sampling_in_flight: false,
+      }
+      const peerReceipt = ownedPeers
+        ? await ownedPeers.cleanup()
+        : retryPeerCleanup
+          ? await retryPeerCleanup()
+          : {
+              peer_connections_total: 0,
+              peer_connections_closed: 0,
+              remote_tracks_expected: 0,
+              remote_tracks_total: 0,
+              remote_tracks_ended: 0,
+              listeners_removed: true,
+              candidate_operations_pending: 0,
+              cleanup_errors: 0,
+            }
+      const mediaReceipt = ownedMedia
+        ? await ownedMedia.cleanup()
+        : retryMediaCleanup
+          ? await retryMediaCleanup()
+          : {
+              generated_tracks_total: 0,
+              generated_tracks_ended: 0,
+              audio_context_state: 'not-created',
+              audio_nodes_disconnected: true,
+              animation_active: false,
+              animation_frame_pending: false,
+              audio_meter_active: false,
+            }
+      return {
+        complete: peerCleanupComplete(peerReceipt) && mediaCleanupComplete(mediaReceipt) &&
+          !samplerReceipt.sampler_active && !samplerReceipt.sampling_in_flight,
+        peers: peerReceipt,
+        media: mediaReceipt,
+        sampler: samplerReceipt,
+      }
+    })
+  }
+
   async function cleanupResources(startupMediaReceipt = null) {
     if (cleanupPromise) {
       const existingReceipt = await cleanupPromise
@@ -301,6 +433,30 @@ export function createLabController(store) {
       sessionAbortController = null
       rescueRuntime.cancelAll('Session cleanup requested.')
       stopElapsedTimer()
+      let startupPeerReceipt = null
+      let startupMediaTaskReceipt = startupMediaReceipt
+      const pendingMediaTask = startupMediaTask
+      if (pendingMediaTask) {
+        try {
+          media = media ?? await pendingMediaTask.promise
+        } catch (error) {
+          startupMediaTaskReceipt = error?.cleanupReceipt ?? startupMediaTaskReceipt
+          partialMediaCleanup = error?.retryMediaCleanup ?? partialMediaCleanup
+        } finally {
+          if (startupMediaTask === pendingMediaTask) startupMediaTask = null
+        }
+      }
+      const pendingPeerTask = startupPeerTask
+      if (pendingPeerTask) {
+        try {
+          peers = peers ?? await pendingPeerTask.promise
+        } catch (error) {
+          startupPeerReceipt = error?.peerCleanupReceipt ?? startupPeerReceipt
+          partialPeerCleanup = error?.retryPeerCleanup ?? partialPeerCleanup
+        } finally {
+          if (startupPeerTask === pendingPeerTask) startupPeerTask = null
+        }
+      }
       const samplerReceipt = (sampler ? await sampler.stop() : null) ?? {
         sampler_active: false,
         sampling_in_flight: false,
@@ -309,6 +465,8 @@ export function createLabController(store) {
         ? await peers.cleanup()
         : partialPeerCleanup
           ? await partialPeerCleanup()
+        : startupPeerReceipt
+          ? startupPeerReceipt
         : {
             peer_connections_total: 0,
             peer_connections_closed: 0,
@@ -324,7 +482,7 @@ export function createLabController(store) {
         ? await media.cleanup()
         : partialMediaCleanup
           ? await partialMediaCleanup()
-        : startupMediaReceipt ?? {
+        : startupMediaTaskReceipt ?? {
             generated_tracks_total: 0,
             generated_tracks_ended: 0,
             audio_context_state: 'not-created',
@@ -333,27 +491,19 @@ export function createLabController(store) {
             animation_frame_pending: false,
             audio_meter_active: false,
           }
+      const staleCleanupReceipt = await staleCleanupQuarantine.drain()
 
       if (remoteVideoElement) {
         remoteVideoElement.pause()
         remoteVideoElement.srcObject = null
       }
       const complete =
-        peerReceipt.peer_connections_closed === peerReceipt.peer_connections_total &&
-        peerReceipt.remote_tracks_total === peerReceipt.remote_tracks_expected &&
-        peerReceipt.remote_tracks_ended === peerReceipt.remote_tracks_total &&
-        mediaReceipt.generated_tracks_ended === mediaReceipt.generated_tracks_total &&
-        ['closed', 'not-created'].includes(mediaReceipt.audio_context_state) &&
-        mediaReceipt.audio_nodes_disconnected &&
-        !mediaReceipt.animation_active &&
-        !mediaReceipt.animation_frame_pending &&
-        !mediaReceipt.audio_meter_active &&
+        peerCleanupComplete(peerReceipt) &&
+        mediaCleanupComplete(mediaReceipt) &&
         !samplerReceipt.sampler_active &&
         !samplerReceipt.sampling_in_flight &&
-        peerReceipt.candidate_operations_pending === 0 &&
-        peerReceipt.cleanup_errors === 0 &&
         elapsedIntervalId === null &&
-        peerReceipt.listeners_removed
+        staleCleanupReceipt.complete
 
       const receipt = {
         captured_at: new Date().toISOString(),
@@ -362,6 +512,7 @@ export function createLabController(store) {
         media: mediaReceipt,
         sampler: samplerReceipt,
         elapsed_timer_active: elapsedIntervalId !== null,
+        orphan_cleanups_pending: staleCleanupReceipt.pending,
       }
 
       if (complete) {
@@ -373,6 +524,8 @@ export function createLabController(store) {
         previousSample = null
         currentSample = null
         remoteVideoElement = null
+        startupMediaTask = null
+        startupPeerTask = null
       }
       return receipt
     })()
@@ -424,8 +577,8 @@ export function createLabController(store) {
     applyApprovedRecovery: rescueRuntime.applyApprovedRecovery,
   })
   const agent = Object.freeze({
-    runDiagnostics: rescueRuntime.runDiagnostics,
-    stageRecoveryPlan: rescueRuntime.stageRecoveryPlan,
+    runDiagnostics: rescueRuntime.runAgentDiagnostics,
+    stageRecoveryPlan: rescueRuntime.stageAgentRecoveryPlan,
     applyRecoveryAction: rescueRuntime.applyRecoveryAction,
     generateIncidentReport: rescueRuntime.generateIncidentReport,
   })

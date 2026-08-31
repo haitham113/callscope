@@ -1,5 +1,26 @@
 import { serviceError } from '../../../shared/errors/serviceErrors.js'
 
+function abortableOperation(operation, signal) {
+  if (!signal) return operation
+  if (signal.aborted) return Promise.reject(new DOMException('Lab startup was cancelled.', 'AbortError'))
+  return new Promise((resolve, reject) => {
+    function abort() {
+      reject(new DOMException('Lab startup was cancelled.', 'AbortError'))
+    }
+    signal.addEventListener('abort', abort, { once: true })
+    operation.then(
+      (value) => {
+        signal.removeEventListener('abort', abort)
+        resolve(value)
+      },
+      (error) => {
+        signal.removeEventListener('abort', abort)
+        reject(error)
+      },
+    )
+  })
+}
+
 function waitForConnected(outboundPeer, inboundPeer, timeoutMs, signal) {
   return new Promise((resolve, reject) => {
     let timeoutId
@@ -48,7 +69,7 @@ function waitForConnected(outboundPeer, inboundPeer, timeoutMs, signal) {
   })
 }
 
-export async function createLoopbackPeerService(sourceStream, signal) {
+export async function createLoopbackPeerService(sourceStream, signal, { candidateDrainTimeoutMs = 2000 } = {}) {
   if (!window.RTCPeerConnection) {
     throw serviceError('MEDIA_CAPABILITY_UNSUPPORTED')
   }
@@ -88,16 +109,37 @@ export async function createLoopbackPeerService(sourceStream, signal) {
     }
   }
 
-  async function flushCandidates(targetPeer, pending) {
+  function flushCandidates(targetPeer, pending) {
     for (const candidate of pending.splice(0)) {
-      await trackCandidateOperation(targetPeer.addIceCandidate(candidate))
+      void trackCandidateOperation(targetPeer.addIceCandidate(candidate))
     }
   }
 
-  async function settleCandidateOperations() {
+  async function settleCandidateOperations({ timeoutMs = candidateDrainTimeoutMs, abortSignal } = {}) {
+    const deadline = Date.now() + timeoutMs
     while (candidateOperations.size > 0) {
-      await Promise.allSettled([...candidateOperations])
+      abortSignal?.throwIfAborted()
+      const remaining = Math.max(0, deadline - Date.now())
+      const settled = await new Promise((resolve, reject) => {
+        let finished = false
+        function finish(callback, value) {
+          if (finished) return
+          finished = true
+          clearTimeout(timeoutId)
+          abortSignal?.removeEventListener('abort', abort)
+          callback(value)
+        }
+        function abort() {
+          finish(reject, new DOMException('Lab startup was cancelled.', 'AbortError'))
+        }
+        const timeoutId = setTimeout(() => finish(resolve, false), remaining)
+        abortSignal?.addEventListener('abort', abort, { once: true })
+        Promise.allSettled([...candidateOperations]).then(() => finish(resolve, true))
+        if (abortSignal?.aborted) abort()
+      })
+      if (!settled) return false
     }
+    return true
   }
 
   listen(outboundPeer, 'icecandidate', relayCandidate(inboundPeer, pendingForInbound))
@@ -113,17 +155,19 @@ export async function createLoopbackPeerService(sourceStream, signal) {
     signal?.throwIfAborted()
     sourceStream.getTracks().forEach((track) => outboundPeer.addTrack(track, sourceStream))
 
-    const offer = await outboundPeer.createOffer()
+    const offer = await abortableOperation(outboundPeer.createOffer(), signal)
     signal?.throwIfAborted()
-    await outboundPeer.setLocalDescription(offer)
-    await inboundPeer.setRemoteDescription(offer)
+    await abortableOperation(outboundPeer.setLocalDescription(offer), signal)
+    await abortableOperation(inboundPeer.setRemoteDescription(offer), signal)
     await flushCandidates(inboundPeer, pendingForInbound)
-    const answer = await inboundPeer.createAnswer()
-    await inboundPeer.setLocalDescription(answer)
-    await outboundPeer.setRemoteDescription(answer)
+    const answer = await abortableOperation(inboundPeer.createAnswer(), signal)
+    await abortableOperation(inboundPeer.setLocalDescription(answer), signal)
+    await abortableOperation(outboundPeer.setRemoteDescription(answer), signal)
     await flushCandidates(outboundPeer, pendingForOutbound)
     await waitForConnected(outboundPeer, inboundPeer, 12_000, signal)
-    await settleCandidateOperations()
+    if (!await settleCandidateOperations({ abortSignal: signal })) {
+      throw new Error('Timed out while settling in-memory ICE candidate operations.')
+    }
   } catch (error) {
     error.peerCleanupReceipt = await cleanup()
     error.retryPeerCleanup = cleanup
@@ -211,9 +255,14 @@ export async function createLoopbackPeerService(sourceStream, signal) {
 
   async function cleanup() {
     cleanupErrors = []
-    listeners.splice(0).forEach((remove) => {
-      try { remove() } catch (error) { cleanupErrors.push(error.name) }
-    })
+    for (const remove of [...listeners]) {
+      try {
+        remove()
+        listeners.splice(listeners.indexOf(remove), 1)
+      } catch (error) {
+        cleanupErrors.push(error.name)
+      }
+    }
     const remoteTracks = collectRemoteTracks()
     remoteTracks.forEach((track) => {
       try { track.stop() } catch (error) { cleanupErrors.push(error.name) }

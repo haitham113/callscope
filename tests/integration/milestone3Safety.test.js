@@ -37,6 +37,7 @@ async function harness({
   unhealthyPhases = [],
   failedPhases = [],
   mutateAudio,
+  readAudio,
 } = {}) {
   const store = healthyStore()
   const audio = { ready_state: 'live', enabled: true, attached: true }
@@ -101,7 +102,7 @@ async function harness({
   const runtime = createAudioRescueRuntime({
     store,
     captureSnapshot,
-    readAudioState: () => ({ ...audio }),
+    readAudioState: () => readAudio ? readAudio(audio) : ({ ...audio }),
     setAudioEnabled(enabled) {
       if (mutateAudio) return mutateAudio(audio, enabled)
       audio.enabled = enabled
@@ -162,6 +163,23 @@ describe('Milestone 3 safety integration', () => {
     expect(subject.store.recoveryPlan.expected_result).toBe('Restore peer [redacted IP]')
   })
 
+  it('rejects staging when authoritative media changed after diagnosis', async () => {
+    const subject = await harness()
+    await subject.runtime.breakAudioTrack()
+    const diagnosis = await subject.runtime.runDiagnostics({ sessionId: subject.store.sessionId })
+    subject.audio.enabled = true
+
+    const result = subject.runtime.stageRecoveryPlan({
+      sessionId: subject.store.sessionId,
+      diagnosisId: diagnosis.diagnosis.id,
+      action: 'enable_audio_track',
+    })
+
+    expect(result).toMatchObject({ ok: false, error: { code: 'DIAGNOSIS_STALE' } })
+    expect(subject.store.recoveryPlan).toBeNull()
+    expect(subject.audio.enabled).toBe(true)
+  })
+
   it('never claims healthy when fault sampling and rollback both fail', async () => {
     const subject = await harness({
       failedPhases: ['fault_baseline'],
@@ -176,6 +194,51 @@ describe('Milestone 3 safety integration', () => {
     expect(subject.audio.enabled).toBe(false)
     expect(subject.store.state).toBe('critical')
     expect(subject.store.activeFault).toBe('disabled_audio')
+  })
+
+  it('rolls back a fault setter that mutates before throwing', async () => {
+    let injectFailure = true
+    const subject = await harness({
+      mutateAudio(audio, enabled) {
+        audio.enabled = enabled
+        if (!enabled && injectFailure) {
+          injectFailure = false
+          throw new Error('Injected post-mutation fault failure')
+        }
+      },
+    })
+
+    const result = await subject.runtime.breakAudioTrack()
+
+    expect(result).toMatchObject({ ok: false, error: { code: 'FAULT_MUTATION_FAILED' } })
+    expect(subject.audio.enabled).toBe(true)
+    expect(subject.store.state).toBe('healthy')
+    expect(subject.store.activeFault).toBeNull()
+    expect((await subject.runtime.breakAudioTrack()).ok).toBe(true)
+  })
+
+  it('returns a stable fault error when post-mutation readback throws', async () => {
+    let failNextRead = false
+    const subject = await harness({
+      mutateAudio(audio, enabled) {
+        audio.enabled = enabled
+        if (!enabled) failNextRead = true
+      },
+      readAudio(audio) {
+        if (failNextRead) {
+          failNextRead = false
+          throw new Error('Injected fault readback failure')
+        }
+        return { ...audio }
+      },
+    })
+
+    const result = await subject.runtime.breakAudioTrack()
+
+    expect(result).toMatchObject({ ok: false, error: { code: 'FAULT_MUTATION_FAILED' } })
+    expect(subject.audio.enabled).toBe(true)
+    expect(subject.store.state).toBe('healthy')
+    expect(subject.store.activeFault).toBeNull()
   })
 
   it.each([
@@ -221,6 +284,25 @@ describe('Milestone 3 safety integration', () => {
     }
   })
 
+  it('does not approve when authoritative pre-approval media read fails', async () => {
+    let failApprovalRead = false
+    const subject = await harness({
+      readAudio(audio) {
+        if (failApprovalRead) throw new Error('Injected approval read failure')
+        return { ...audio }
+      },
+    })
+    await subject.runtime.breakAudioTrack()
+    await subject.runtime.diagnoseAndStageRecovery()
+    failApprovalRead = true
+
+    const result = subject.runtime.approvePlan()
+
+    expect(result).toMatchObject({ ok: false, error: { code: 'STATS_UNAVAILABLE' } })
+    expect(subject.store.recoveryPlan.status).toBe('staged')
+    expect(subject.audio.enabled).toBe(false)
+  })
+
   it('rejects rejected and used plans without a second mutation', async () => {
     const rejected = await harness()
     await rejected.runtime.breakAudioTrack()
@@ -239,6 +321,79 @@ describe('Milestone 3 safety integration', () => {
     expect(used.audio.enabled).toBe(true)
   })
 
+  it('consumes a plan when recovery mutates the track before throwing', async () => {
+    let throwAfterMutation = true
+    const subject = await harness({
+      mutateAudio(audio, enabled) {
+        audio.enabled = enabled
+        if (enabled && throwAfterMutation) {
+          throwAfterMutation = false
+          throw new Error('Injected post-mutation failure')
+        }
+      },
+    })
+    await subject.runtime.breakAudioTrack()
+    await subject.runtime.diagnoseAndStageRecovery()
+    subject.runtime.approvePlan()
+
+    const result = await subject.runtime.applyApprovedRecovery(subject.store.recoveryPlan.id)
+
+    expect(result).toMatchObject({ ok: false, error: { code: 'RECOVERY_FAILED' } })
+    expect(subject.audio.enabled).toBe(true)
+    expect(subject.store.state).toBe('critical')
+    expect(subject.store.recoveryPlan.status).toBe('applied')
+    expect(subject.store.timeline.some((event) => event.title === 'Approved recovery applied')).toBe(false)
+    expect((await subject.runtime.applyApprovedRecovery(subject.store.recoveryPlan.id)).error.code).toBe('PLAN_ALREADY_USED')
+  })
+
+  it('consumes a plan when mutation succeeds but authoritative readback is incompatible', async () => {
+    const subject = await harness({
+      mutateAudio(audio, enabled) {
+        audio.enabled = enabled
+        if (enabled) audio.attached = false
+      },
+    })
+    await subject.runtime.breakAudioTrack()
+    await subject.runtime.diagnoseAndStageRecovery()
+    subject.runtime.approvePlan()
+
+    const result = await subject.runtime.applyApprovedRecovery(subject.store.recoveryPlan.id)
+
+    expect(result).toMatchObject({ ok: false, error: { code: 'RECOVERY_FAILED' } })
+    expect(subject.audio).toMatchObject({ enabled: true, attached: false })
+    expect(subject.store.state).toBe('critical')
+    expect(subject.store.recoveryPlan.status).toBe('applied')
+    expect(subject.store.timeline.some((event) => event.title === 'Approved recovery applied')).toBe(false)
+  })
+
+  it('fails atomically when authoritative recovery readback throws', async () => {
+    let recoveryMutationAttempted = false
+    const subject = await harness({
+      mutateAudio(audio, enabled) {
+        audio.enabled = enabled
+        if (enabled) recoveryMutationAttempted = true
+      },
+      readAudio(audio) {
+        if (recoveryMutationAttempted) throw new Error('Injected readback failure')
+        return { ...audio }
+      },
+    })
+    await subject.runtime.breakAudioTrack()
+    await subject.runtime.diagnoseAndStageRecovery()
+    subject.runtime.approvePlan()
+
+    const result = await subject.runtime.applyApprovedRecovery(subject.store.recoveryPlan.id)
+
+    expect(result).toMatchObject({ ok: false, error: { code: 'RECOVERY_FAILED' } })
+    expect(subject.store.state).toBe('critical')
+    expect(subject.store.recoveryPlan.status).toBe('applied')
+    expect(subject.store.timeline.at(-1)).toMatchObject({
+      type: 'operation_failed',
+      title: 'Recovery failed',
+      evidence: { mutation_uncertain: true },
+    })
+  })
+
   it('rejects rapid duplicate diagnostics while one sampling window owns the fault', async () => {
     const subject = await harness({ blockedPhases: ['diagnostic'] })
     await subject.runtime.breakAudioTrack()
@@ -248,6 +403,33 @@ describe('Milestone 3 safety integration', () => {
     expect(duplicate.error.code).toBe('INVALID_STATE_TRANSITION')
     subject.release('diagnostic')
     expect((await first).ok).toBe(true)
+  })
+
+  it('assigns agent diagnosis provenance internally and ignores actor-like input', async () => {
+    const subject = await harness()
+    await subject.runtime.breakAudioTrack()
+
+    const result = await subject.runtime.runAgentDiagnostics({
+      sessionId: subject.store.sessionId,
+      symptom: 'silent_audio',
+      actor: 'User',
+    })
+
+    expect(result.ok).toBe(true)
+    const requestEvent = subject.store.timeline.find((event) => event.type === 'diagnosis_requested')
+    expect(requestEvent).toMatchObject({ actor: 'Agent', title: 'Agent diagnosis requested' })
+
+    const staged = subject.runtime.stageAgentRecoveryPlan({
+      sessionId: subject.store.sessionId,
+      diagnosisId: result.diagnosis.id,
+      action: 'enable_audio_track',
+      actor: 'User',
+    })
+    expect(staged.ok).toBe(true)
+    expect(subject.store.timeline.find((event) => event.type === 'recovery_plan_staged')).toMatchObject({
+      actor: 'Agent',
+      title: 'Recovery plan staged',
+    })
   })
 
   it('reset cancels diagnosis and ignores a deliberately late completion', async () => {
@@ -345,5 +527,33 @@ describe('Milestone 3 safety integration', () => {
     expect(subject.store.activeFault).toBe('disabled_audio')
     expect(subject.store.diagnosis).toBeNull()
     expect(subject.store.recoveryPlan).toBeNull()
+  })
+
+  it('returns a stable reset error when mutation and authoritative readback both throw', async () => {
+    let failReset = false
+    const subject = await harness({
+      mutateAudio(audio, enabled) {
+        audio.enabled = enabled
+        if (enabled && failReset) throw new Error('Injected post-mutation reset failure')
+      },
+      readAudio(audio) {
+        if (failReset) throw new Error('Injected reset readback failure')
+        return { ...audio }
+      },
+    })
+    await subject.runtime.breakAudioTrack()
+    failReset = true
+
+    const result = await subject.runtime.resetScenario()
+
+    expect(result).toMatchObject({ ok: false, error: { code: 'FAULT_MUTATION_FAILED' } })
+    expect(subject.store.state).toBe('critical')
+    expect(subject.store.diagnosis).toBeNull()
+    expect(subject.store.recoveryPlan).toBeNull()
+    expect(subject.store.timeline.at(-1)).toMatchObject({
+      type: 'operation_failed',
+      title: 'Scenario reset failed',
+      evidence: { mutation_uncertain: true },
+    })
   })
 })

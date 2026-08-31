@@ -70,6 +70,44 @@ test('partial peer startup reports and releases both real peer connections befor
   expect(errors).toEqual([])
 })
 
+test('a late cancelled startup cannot clean resources owned by a replacement session', async ({ page }) => {
+  const errors = collectBrowserErrors(page)
+  await page.addInitScript(() => {
+    const nativeCreateOffer = window.RTCPeerConnection.prototype.createOffer
+    let firstOffer = true
+    let releaseFirstOffer
+    const firstOfferGate = new Promise((resolve) => { releaseFirstOffer = resolve })
+    window.__releaseFirstStartup = () => releaseFirstOffer()
+    window.RTCPeerConnection.prototype.createOffer = async function delayedFirstOffer(...args) {
+      if (firstOffer) {
+        firstOffer = false
+        await firstOfferGate
+      }
+      return nativeCreateOffer.apply(this, args)
+    }
+  })
+  await page.goto('./')
+
+  await page.getByTestId('start-demo').click({ noWaitAfter: true })
+  await expect(page.getByTestId('health-status')).toContainText('Starting')
+  await page.getByTestId('end-reset').click()
+  await expect(page.getByTestId('health-status')).toContainText('Ended')
+  await page.getByTestId('end-reset').click()
+  await startHealthy(page)
+
+  const replacementSession = await page.locator('.video-hud span').first().innerText()
+  await page.evaluate(() => window.__releaseFirstStartup())
+  await page.waitForTimeout(500)
+
+  expect(await page.locator('.video-hud span').first().innerText()).toBe(replacementSession)
+  await expect(page.getByTestId('health-status')).toContainText('Healthy')
+  await expect.poll(() => page.getByTestId('remote-video').evaluate((video) => ({
+    has_stream: Boolean(video.srcObject),
+    tracks_live: video.srcObject?.getTracks().every((track) => track.readyState === 'live') ?? false,
+  }))).toEqual({ has_stream: true, tracks_live: true })
+  expect(errors).toEqual([])
+})
+
 test('an injected peer cleanup failure produces a real incomplete receipt and failed state', async ({ page }) => {
   const errors = collectBrowserErrors(page)
   await page.addInitScript(() => {
@@ -92,6 +130,36 @@ test('an injected peer cleanup failure produces a real incomplete receipt and fa
   await expect(page.getByTestId('cleanup-receipt')).toContainText('Cleanup needs attention')
   await expect(page.getByTestId('cleanup-receipt')).toContainText('Peers 1/2 closed')
   await expect(page.getByTestId('start-demo')).toHaveCount(0)
+
+  await page.getByTestId('end-reset').click()
+  await expect(page.getByTestId('health-status')).toContainText('Ended')
+  await expect(page.getByTestId('cleanup-receipt')).toContainText('All tracked browser resources released')
+  await startHealthy(page)
+  expect(errors).toEqual([])
+})
+
+test('a never-settling AudioContext close returns an incomplete receipt and remains retryable', async ({ page }) => {
+  const errors = collectBrowserErrors(page)
+  await page.addInitScript(() => {
+    const NativeAudioContext = window.AudioContext
+    let blockOneClose = true
+    window.AudioContext = class extends NativeAudioContext {
+      close() {
+        if (blockOneClose) {
+          blockOneClose = false
+          return new Promise(() => {})
+        }
+        return super.close()
+      }
+    }
+  })
+  await page.goto('./')
+  await startHealthy(page)
+
+  await page.getByTestId('end-reset').click({ noWaitAfter: true })
+  await expect(page.getByTestId('health-status')).toContainText('Failed', { timeout: 5000 })
+  await expect(page.getByRole('alert')).toContainText('CLEANUP_INCOMPLETE')
+  await expect(page.getByTestId('cleanup-receipt')).toContainText('Cleanup needs attention')
 
   await page.getByTestId('end-reset').click()
   await expect(page.getByTestId('health-status')).toContainText('Ended')

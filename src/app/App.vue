@@ -121,7 +121,11 @@ async function startLab() {
 }
 
 async function endOrReset() {
-  await human.end()
+  try {
+    await human.end()
+  } finally {
+    startPending.value = false
+  }
 }
 
 async function runOperation(operation) {

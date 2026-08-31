@@ -30,6 +30,17 @@ export function createAudioRescueRuntime({ store, captureSnapshot, readAudioStat
   const failure = (error, fallbackCode) => cancellationResult(error) ?? resultFromError(error, fallbackCode)
   let planExpiryTimerId = null
 
+  function safeReadAudioState() {
+    try {
+      return { ok: true, value: readAudioState() }
+    } catch {
+      return {
+        ok: false,
+        value: { ready_state: 'unavailable', enabled: null, attached: false },
+      }
+    }
+  }
+
   function clearPlanExpiry() {
     if (planExpiryTimerId !== null) clearTimeout(planExpiryTimerId)
     planExpiryTimerId = null
@@ -94,11 +105,28 @@ export function createAudioRescueRuntime({ store, captureSnapshot, readAudioStat
 
   async function breakAudioTrack() {
     if (store.state !== 'healthy' || store.activeFault) return reject(errorResult('INVALID_STATE_TRANSITION'), 'Audio fault rejected')
-    const before = readAudioState()
+    const beforeRead = safeReadAudioState()
+    if (!beforeRead.ok) return reject(errorResult('FAULT_MUTATION_FAILED'), 'Audio fault rejected')
+    const before = beforeRead.value
     if (before.ready_state !== 'live' || !before.attached) return reject(errorResult('FAULT_MUTATION_FAILED'), 'Audio fault rejected')
-    try { setAudioEnabled(false) } catch (error) { return reject(resultFromError(error, 'FAULT_MUTATION_FAILED'), 'Audio fault failed') }
-    const after = readAudioState()
-    if (after.enabled !== false) return reject(errorResult('FAULT_MUTATION_FAILED'), 'Audio fault failed')
+    try {
+      setAudioEnabled(false)
+    } catch (error) {
+      const result = resultFromError(error, 'FAULT_MUTATION_FAILED')
+      try { setAudioEnabled(true) } catch { /* The authoritative read below decides the state. */ }
+      const finalRead = safeReadAudioState()
+      store.failAudioFault(result, finalRead.value, { mutationUncertain: !finalRead.ok })
+      return result
+    }
+    const afterRead = safeReadAudioState()
+    if (!afterRead.ok || afterRead.value.enabled !== false) {
+      const result = errorResult('FAULT_MUTATION_FAILED')
+      try { setAudioEnabled(true) } catch { /* The authoritative read below decides the state. */ }
+      const finalRead = safeReadAudioState()
+      store.failAudioFault(result, finalRead.value, { mutationUncertain: !finalRead.ok })
+      return result
+    }
+    const after = afterRead.value
 
     store.beginAudioFault()
     const window = beginWindow('fault_baseline', 'Audio fault failed')
@@ -115,22 +143,14 @@ export function createAudioRescueRuntime({ store, captureSnapshot, readAudioStat
       const result = failure(error, 'FAULT_MUTATION_FAILED')
       if (operations.isCurrent(operation)) {
         try { setAudioEnabled(true) } catch { /* Cleanup/reset remains available. */ }
-        const actual = readAudioState()
-        store.activeFault = actual.enabled === false ? 'disabled_audio' : null
-        store.failureBaseline = null
-        store.faultRevision += 1
-        store.diagnosis = null
-        store.recoveryPlan = null
-        store.verification = null
-        store.incidentReport = null
-        store.healthStatus = 'Critical'
-        store.recordOperationError(result, 'Audio fault failed')
+        const actual = safeReadAudioState()
+        store.failAudioFault(result, actual.value, { mutationUncertain: !actual.ok })
       }
       return result
     } finally { operations.finish(operation) }
   }
 
-  async function runDiagnostics({ sessionId = store.sessionId, symptom = 'silent_audio' } = {}) {
+  async function runDiagnosticsForActor({ sessionId = store.sessionId, symptom = 'silent_audio' } = {}, actor) {
     const session = validateSession(sessionId)
     if (!session.ok) return reject(session, 'Diagnosis rejected')
     if (store.state !== 'critical' || store.activeFault !== 'disabled_audio' || symptom !== 'silent_audio') {
@@ -139,12 +159,12 @@ export function createAudioRescueRuntime({ store, captureSnapshot, readAudioStat
     const window = beginWindow('diagnostic', 'Diagnosis rejected')
     if (!window.ok) return window
     const { operation } = window
-    store.beginDiagnosis()
+    store.beginDiagnosis(actor)
     try {
       const snapshot = await captureOwned(operation, { stabilize: true, phase: 'diagnostic' })
       const diagnosis = diagnoseDisabledAudio(snapshot)
       assertOwned(operation)
-      store.completeDiagnosis(diagnosis, snapshot)
+      store.completeDiagnosis(diagnosis, snapshot, actor)
       return success({ ok: true, diagnosis, snapshot })
     } catch (error) {
       const result = failure(error, 'STATS_UNAVAILABLE')
@@ -157,19 +177,32 @@ export function createAudioRescueRuntime({ store, captureSnapshot, readAudioStat
     } finally { operations.finish(operation) }
   }
 
-  function stageRecoveryPlan({
+  function runDiagnostics(input) {
+    return runDiagnosticsForActor(input, 'User')
+  }
+
+  function runAgentDiagnostics(input) {
+    return runDiagnosticsForActor(input, 'Agent')
+  }
+
+  function stageRecoveryPlanForActor({
     sessionId = store.sessionId,
     diagnosisId,
     action = 'enable_audio_track',
     reason = 'The live outbound audio track is disabled while remaining live and attached to its intended sender.',
     expectedResult = 'Re-enable audio transmission while keeping both peer connections and the existing sender intact.',
-  } = {}) {
+  } = {}, actor = 'System') {
     const session = validateSession(sessionId)
     if (!session.ok) return reject(session, 'Recovery staging rejected')
     const diagnosis = store.diagnosis
     if (!diagnosis || diagnosis.id !== diagnosisId) return reject(errorResult('DIAGNOSIS_NOT_FOUND'), 'Recovery staging rejected')
     if (diagnosis.session_id !== store.sessionId || diagnosis.session_epoch !== store.sessionEpoch ||
         diagnosis.fault_revision !== store.faultRevision || diagnosis.snapshot_hash !== store.latestSnapshot?.snapshot_hash) {
+      return reject(errorResult('DIAGNOSIS_STALE'), 'Recovery staging rejected')
+    }
+    const actualAudio = readAudioState()
+    if (actualAudio.enabled !== false || actualAudio.ready_state !== 'live' || actualAudio.attached !== true ||
+        store.connection.outbound !== 'connected' || store.connection.inbound !== 'connected') {
       return reject(errorResult('DIAGNOSIS_STALE'), 'Recovery staging rejected')
     }
     if (store.state !== 'critical') return reject(errorResult('INVALID_STATE_TRANSITION'), 'Recovery staging rejected')
@@ -182,9 +215,17 @@ export function createAudioRescueRuntime({ store, captureSnapshot, readAudioStat
       now,
     })
     if (!planResult.ok) return reject(planResult, 'Recovery staging rejected')
-    store.stageRecoveryPlan(planResult.plan)
+    store.stageRecoveryPlan(planResult.plan, actor)
     schedulePlanExpiry(planResult.plan)
     return success({ ok: true, plan: planResult.plan })
+  }
+
+  function stageRecoveryPlan(input) {
+    return stageRecoveryPlanForActor(input, 'System')
+  }
+
+  function stageAgentRecoveryPlan(input) {
+    return stageRecoveryPlanForActor(input, 'Agent')
   }
 
   async function diagnoseAndStageRecovery() {
@@ -208,10 +249,10 @@ export function createAudioRescueRuntime({ store, captureSnapshot, readAudioStat
     const plan = store.recoveryPlan
     if (!plan || plan.id !== planId) return reject(errorResult('PLAN_NOT_FOUND'), 'Approval rejected')
     if (expireIfNeeded(plan)) return reject(errorResult('PLAN_EXPIRED'), 'Approval rejected')
-    const before = readAudioState()
+    const before = safeReadAudioState()
+    if (!before.ok) return reject(errorResult('STATS_UNAVAILABLE'), 'Approval rejected')
     if (!store.approvePlan(planId)) return reject(errorResult('PLAN_NOT_APPROVED'), 'Approval rejected')
-    const after = readAudioState()
-    return success({ ok: true, status: 'approved', media_state_unchanged: before.enabled === after.enabled, audio_track: after })
+    return success({ ok: true, status: 'approved', media_state_unchanged: true, audio_track: before.value })
   }
 
   function rejectPlan(planId = store.recoveryPlan?.id) {
@@ -273,6 +314,8 @@ export function createAudioRescueRuntime({ store, captureSnapshot, readAudioStat
     if (!window.ok) return window
     const { operation } = window
     let mutated = false
+    let mutationUncertain = false
+    let actualBefore = null
     try {
       const currentSnapshot = await captureOwned(operation, { stabilize: false, phase: 'recovery_preflight' })
       const validation = validateActivePlan({ sessionId, planId, snapshotHash: currentSnapshot.snapshot_hash })
@@ -280,13 +323,27 @@ export function createAudioRescueRuntime({ store, captureSnapshot, readAudioStat
 
       assertOwned(operation)
       const plan = store.recoveryPlan
-      const actualBefore = readAudioState()
+      actualBefore = readAudioState()
       clearPlanExpiry()
       store.beginRecovery()
-      try { setAudioEnabled(true) } catch (error) { throw serviceError('RECOVERY_FAILED', { cause: error }) }
-      const actualAfter = readAudioState()
+      try {
+        setAudioEnabled(true)
+      } catch (error) {
+        const readback = safeReadAudioState()
+        mutated = readback.ok && readback.value.enabled !== actualBefore.enabled
+        mutationUncertain = !readback.ok
+        throw serviceError('RECOVERY_FAILED', { cause: error })
+      }
+      const readback = safeReadAudioState()
+      if (!readback.ok) {
+        mutationUncertain = true
+        throw serviceError('RECOVERY_FAILED')
+      }
+      const actualAfter = readback.value
+      mutated = actualAfter.enabled !== actualBefore.enabled ||
+        actualAfter.ready_state !== actualBefore.ready_state ||
+        actualAfter.attached !== actualBefore.attached
       if (actualAfter.enabled !== true || actualAfter.ready_state !== 'live' || actualAfter.attached !== true) throw serviceError('RECOVERY_FAILED')
-      mutated = true
       assertOwned(operation)
       store.markRecoveryApplied(actualBefore, actualAfter)
 
@@ -311,7 +368,15 @@ export function createAudioRescueRuntime({ store, captureSnapshot, readAudioStat
     } catch (error) {
       const result = failure(error, mutated ? 'VERIFICATION_INCOMPLETE' : 'STATS_UNAVAILABLE')
       if (operations.isCurrent(operation)) {
-        if (result.error.code === 'RECOVERY_FAILED' || mutated) store.failRecovery(result)
+        if (result.error.code === 'RECOVERY_FAILED' || mutated || mutationUncertain ||
+            ['recovering', 'verifying'].includes(store.state)) {
+          store.failRecovery(result, {
+            mutationObserved: mutated,
+            mutationUncertain,
+            previousState: actualBefore,
+            newState: safeReadAudioState().value,
+          })
+        }
         else store.recordOperationError(result, 'Recovery application failed')
       }
       return result
@@ -330,7 +395,8 @@ export function createAudioRescueRuntime({ store, captureSnapshot, readAudioStat
       setAudioEnabled(true)
     } catch (error) {
       const result = resultFromError(error, 'FAULT_MUTATION_FAILED')
-      store.failScenarioReset(result, readAudioState())
+      const actual = safeReadAudioState()
+      store.failScenarioReset(result, actual.value, { mutationUncertain: !actual.ok })
       return result
     }
     store.beginScenarioReset()
@@ -338,7 +404,11 @@ export function createAudioRescueRuntime({ store, captureSnapshot, readAudioStat
     if (!window.ok) return window
     const { operation } = window
     try {
-      const snapshot = await captureOwned(operation, { stabilize: true, phase: 'scenario_reset' })
+      let snapshot
+      for (let attempt = 0; attempt < RECOVERY_SAMPLE_ATTEMPTS; attempt += 1) {
+        snapshot = await captureOwned(operation, { stabilize: true, phase: 'scenario_reset' })
+        if (!canAwaitFreshAudioProgression(snapshot)) break
+      }
       store.completeScenarioReset(snapshot)
       if (snapshot.health.status !== 'healthy') {
         return reject(errorResult('VERIFICATION_INCOMPLETE'), 'Scenario reset failed')
@@ -359,7 +429,9 @@ export function createAudioRescueRuntime({ store, captureSnapshot, readAudioStat
     breakAudioTrack,
     resetScenario,
     runDiagnostics,
+    runAgentDiagnostics,
     stageRecoveryPlan,
+    stageAgentRecoveryPlan,
     diagnoseAndStageRecovery,
     approvePlan,
     rejectPlan,

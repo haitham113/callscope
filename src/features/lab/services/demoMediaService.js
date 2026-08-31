@@ -9,8 +9,40 @@ function ensureMediaCapabilities(canvas) {
   }
 }
 
-export async function createDemoMedia(canvas) {
+function abortableOperation(operation, signal) {
+  if (!signal) return operation
+  if (signal.aborted) return Promise.reject(new DOMException('Lab startup was cancelled.', 'AbortError'))
+  return new Promise((resolve, reject) => {
+    function abort() {
+      reject(new DOMException('Lab startup was cancelled.', 'AbortError'))
+    }
+    signal.addEventListener('abort', abort, { once: true })
+    operation.then(
+      (value) => {
+        signal.removeEventListener('abort', abort)
+        resolve(value)
+      },
+      (error) => {
+        signal.removeEventListener('abort', abort)
+        reject(error)
+      },
+    )
+  })
+}
+
+function settleWithin(operation, timeoutMs) {
+  return new Promise((resolve) => {
+    const timeoutId = setTimeout(() => resolve(false), timeoutMs)
+    operation.then(
+      () => { clearTimeout(timeoutId); resolve(true) },
+      () => { clearTimeout(timeoutId); resolve(false) },
+    )
+  })
+}
+
+export async function createDemoMedia(canvas, signal, { cleanupTimeoutMs = 2000 } = {}) {
   ensureMediaCapabilities(canvas)
+  signal?.throwIfAborted()
 
   const context = canvas.getContext('2d')
   let audioContext = null
@@ -114,7 +146,7 @@ export async function createDemoMedia(canvas) {
     pulse.start()
     pulseStarted = true
 
-    if (audioContext.state !== 'running') await audioContext.resume()
+    if (audioContext.state !== 'running') await abortableOperation(audioContext.resume(), signal)
     if (audioContext.state !== 'running') {
       throw new Error(
         `AudioContext did not enter running state (state: ${audioContext.state}).`,
@@ -227,9 +259,9 @@ export async function createDemoMedia(canvas) {
       generatedTracks.forEach((track) => track.stop())
       if (audioContext && audioContext.state !== 'closed') {
         try {
-          await audioContext.close()
+          await settleWithin(audioContext.close(), cleanupTimeoutMs)
         } catch {
-          // The authoritative state below makes a failed close visible.
+          // The authoritative state below makes a synchronous close failure visible.
         }
       }
 

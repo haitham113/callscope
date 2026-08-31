@@ -63,6 +63,10 @@ function appendSystemTimeline(store, title, detail, evidence = null, options) {
   appendTimeline(store, 'System', title, detail, evidence, options)
 }
 
+function appendDiagnosticTimeline(store, actor, title, detail, evidence = null, options) {
+  appendTimeline(store, actor === 'Agent' ? 'Agent' : 'User', title, detail, evidence, options)
+}
+
 export const useLabStore = defineStore('lab', {
   state: () => ({
     sessionId: null,
@@ -178,18 +182,45 @@ export const useLabStore = defineStore('lab', {
         { snapshot_hash: snapshot.snapshot_hash, fault_revision: this.faultRevision },
       )
     },
-    beginDiagnosis() {
+    failAudioFault(result, actualAudio, { mutationUncertain = false } = {}) {
+      const rollbackConfirmed = !mutationUncertain && actualAudio?.enabled === true &&
+        actualAudio?.ready_state === 'live' && actualAudio?.attached === true
+      if (rollbackConfirmed && this.state === 'critical') this.transition('healthy')
+      if (!rollbackConfirmed && this.state === 'healthy') this.transition('critical')
+      this.activeFault = actualAudio?.enabled === false ? 'disabled_audio' : null
+      this.failureBaseline = null
+      this.faultRevision += 1
+      this.diagnosis = null
+      this.recoveryPlan = null
+      this.verification = null
+      this.incidentReport = null
+      this.healthStatus = rollbackConfirmed ? 'Healthy' : 'Critical'
+      this.recordOperationError(result, 'Audio fault failed', {
+        current_state: actualAudio,
+        mutation_uncertain: mutationUncertain,
+        rollback_confirmed: rollbackConfirmed,
+      })
+    },
+    beginDiagnosis(actor = 'User') {
       this.transition('diagnosing')
       this.healthStatus = 'Diagnosing'
-      appendUserTimeline(this, 'Manual diagnosis requested', 'CallScope is sampling the active disabled-audio fault.')
+      appendDiagnosticTimeline(
+        this,
+        actor,
+        actor === 'Agent' ? 'Agent diagnosis requested' : 'Manual diagnosis requested',
+        'CallScope is sampling the active disabled-audio fault.',
+        null,
+        { type: 'diagnosis_requested' },
+      )
     },
-    completeDiagnosis(diagnosis, snapshot) {
+    completeDiagnosis(diagnosis, snapshot, actor = 'System') {
       this.diagnosis = diagnosis
       this.latestSnapshot = snapshot
       this.transition('critical')
       this.healthStatus = 'Critical'
-      appendSystemTimeline(
+      appendTimeline(
         this,
+        actor === 'Agent' ? 'Agent' : 'System',
         'Disabled audio diagnosed',
         'Authoritative track state identified a live, attached, but disabled outbound audio track.',
         {
@@ -200,15 +231,17 @@ export const useLabStore = defineStore('lab', {
         },
       )
     },
-    stageRecoveryPlan(plan) {
+    stageRecoveryPlan(plan, actor = 'System') {
       this.recoveryPlan = plan
       this.transition('awaiting_approval')
       this.healthStatus = 'Critical'
-      appendSystemTimeline(
+      appendTimeline(
         this,
+        actor === 'Agent' ? 'Agent' : 'System',
         'Recovery plan staged',
         'Enable the actual outbound audio track after explicit human approval.',
         { plan_id: plan.id, action: plan.action, expires_at: plan.expires_at },
+        { type: 'recovery_plan_staged' },
       )
     },
     approvePlan(planId) {
@@ -261,10 +294,20 @@ export const useLabStore = defineStore('lab', {
       this.healthStatus = 'Recovering'
       this.error = null
     },
-    failRecovery(result) {
+    failRecovery(result, { mutationObserved = false, mutationUncertain = false, previousState = null, newState = null } = {}) {
+      if ((mutationObserved || mutationUncertain) && this.recoveryPlan?.status === 'approved') {
+        assertRecoveryTransition(this.recoveryPlan.status, 'applied')
+        this.recoveryPlan.status = 'applied'
+        this.recoveryPlan.applied_at = new Date().toISOString()
+      }
       if (['recovering', 'verifying'].includes(this.state)) this.transition('critical')
       this.healthStatus = 'Critical'
-      this.recordOperationError(result, 'Recovery failed')
+      this.recordOperationError(result, 'Recovery failed', {
+        mutation_observed: mutationObserved,
+        mutation_uncertain: mutationUncertain,
+        previous_state: previousState,
+        current_state: newState,
+      })
     },
     markRecoveryApplied(previousState, newState) {
       assertRecoveryTransition(this.recoveryPlan.status, 'applied')
@@ -344,7 +387,7 @@ export const useLabStore = defineStore('lab', {
         { snapshot_hash: snapshot.snapshot_hash, audio_enabled: snapshot.tracks.audio.enabled },
       )
     },
-    failScenarioReset(result, actualAudio) {
+    failScenarioReset(result, actualAudio, { mutationUncertain = false } = {}) {
       if (this.state !== 'verifying') this.transition('verifying')
       this.faultRevision += 1
       this.activeFault = actualAudio?.enabled === false ? 'disabled_audio' : null
@@ -355,16 +398,20 @@ export const useLabStore = defineStore('lab', {
       this.incidentReport = null
       this.transition('critical')
       this.healthStatus = 'Critical'
-      this.recordOperationError(result, 'Scenario reset failed')
+      this.recordOperationError(result, 'Scenario reset failed', {
+        current_state: actualAudio,
+        mutation_uncertain: mutationUncertain,
+      })
     },
-    recordOperationError(result, title = 'Operation rejected') {
+    recordOperationError(result, title = 'Operation rejected', evidence = null) {
       const sanitized = sanitizeValue(result)
+      const safeEvidence = sanitizeValue(evidence)
       this.error = `${sanitized.error.code}: ${sanitized.error.message}`
       appendSystemTimeline(
         this,
         title,
         sanitized.error.message,
-        { error: sanitized.error },
+        { ...safeEvidence, error: sanitized.error },
         { type: 'operation_failed' },
       )
     },

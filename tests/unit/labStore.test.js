@@ -123,4 +123,34 @@ describe('lab store session reset', () => {
       title: 'Lab cleanup incomplete',
     })
   })
+
+  it('atomically invalidates fault-owned artifacts after baseline capture fails', () => {
+    const store = useLabStore()
+    store.beginSession()
+    store.markHealthy({ captured_at: 'synthetic' })
+    store.beginAudioFault()
+    store.failureBaseline = { snapshot_hash: 'stale' }
+    store.diagnosis = { id: 'stale-diagnosis' }
+    store.recoveryPlan = { id: 'stale-plan', status: 'staged' }
+
+    store.failAudioFault(
+      { ok: false, error: { code: 'FAULT_MUTATION_FAILED', message: 'Synthetic failure.', recoverable: true, suggested_next_step: 'Reset.' } },
+      { ready_state: 'live', enabled: true, attached: true },
+    )
+
+    expect(store).toMatchObject({
+      state: 'healthy',
+      activeFault: null,
+      failureBaseline: null,
+      diagnosis: null,
+      recoveryPlan: null,
+      verification: null,
+      incidentReport: null,
+      healthStatus: 'Healthy',
+    })
+    expect(store.timeline.at(-1)).toMatchObject({
+      type: 'operation_failed',
+      title: 'Audio fault failed',
+    })
+  })
 })
