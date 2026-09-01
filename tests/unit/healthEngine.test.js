@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   deriveMetrics,
+  evaluateCallHealth,
   evaluateHealthyEvidence,
 } from '../../src/features/diagnostics/services/healthEngine.js'
 
@@ -98,6 +99,8 @@ describe('truthful healthy evidence', () => {
       outboundBitrateKbps: 32,
       packetLoss: 0,
       latencyMs: 3,
+      roundTripTimeMs: 3,
+      jitterMs: 4,
       frameRate: 20,
     })
     expect(deriveMetrics(null, current).outboundBitrateKbps).toBeNull()
@@ -125,5 +128,33 @@ describe('truthful healthy evidence', () => {
     withPreviousLoss.inbound.packetLoss = 2
     withCurrentLoss.inbound.packetLoss = 5
     expect(deriveMetrics(withPreviousLoss, withCurrentLoss).packetLoss).toBe(3)
+  })
+
+  it('reports Degraded from a confirmed video sender bitrate cap without relying on noisy metrics', () => {
+    const result = evaluateCallHealth({
+      connection: peers,
+      tracks,
+      receivers,
+      senders: {
+        video: {
+          attached: true,
+          max_bitrate_bps: 80_000,
+          bitrate_limited: true,
+          readback_confirmed: true,
+        },
+      },
+      progression: {
+        outbound_audio: null,
+        inbound_audio: null,
+        outbound_video: null,
+        inbound_video: null,
+      },
+    })
+
+    expect(result.health).toMatchObject({ status: 'degraded', score: 70 })
+    expect(result.health.deductions).toContainEqual(expect.objectContaining({
+      code: 'VIDEO_BITRATE_CONSTRAINED',
+      severity: 'warning',
+    }))
   })
 })

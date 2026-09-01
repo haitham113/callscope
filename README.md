@@ -111,17 +111,20 @@ The allowlisted recovery sets the track back to `enabled: true`.
 
 ### Constrained video bitrate
 
-This secondary scenario is specified but intentionally not implemented in the current build.
-
 CallScope uses `RTCRtpSender.setParameters()` to apply a deliberately low `maxBitrate` to the video encoding.
 
 Observable evidence includes:
 
 - The sender contains an active bitrate constraint.
-- Measured outbound bitrate or frame behavior is reduced where available.
+- Immediate sender-parameter readback confirms the configured cap.
+- Measured outbound bitrate or frame behavior is displayed where available.
 - Health becomes **Degraded**.
 
-The allowlisted recovery restores the normal generated-video bitrate profile.
+The allowlisted recovery restores the preserved known-good encoding profile and
+verifies it with another immediate readback. Bitrate and frame changes are
+supporting evidence only; noisy or unavailable loopback statistics do not block
+a truthful recovery verdict. Switching between audio and video faults requires
+an explicit **Reset scenario to healthy** action.
 
 ## Human Control and Safety
 
@@ -248,9 +251,17 @@ The deployed WebMCP experience must be served over HTTPS.
 
 ```bash
 npm run test
+npm run lint
 npm run build
 npm run test:e2e
 npm run test:spikes
+```
+
+To run the installed Inspector extension-message check, provide either a
+temporary Chrome profile containing the Inspector or an unpacked extension:
+
+```bash
+CALLSCOPE_WEBMCP_USER_DATA_DIR=/path/to/temporary-profile npm run test:plugin
 ```
 
 The browser suite also builds the production application before starting its
@@ -262,6 +273,8 @@ The critical browser checks are:
 - Both peer connections reach a connected state.
 - Audio/video counters progress.
 - The disabled-audio scenario changes the real outbound track state.
+- The bitrate scenario changes real sender parameters and confirms cap/restoration from fresh readback.
+- Scenario switching is blocked until an explicit healthy reset succeeds.
 - Applying a repair before approval fails safely.
 - An approved compatible repair changes the actual media state.
 - Verification produces measurable before-and-after evidence.
@@ -272,7 +285,7 @@ The critical browser checks are:
 - Nested success/error/report data recursively removes IP addresses, SDP, device labels, and secret-bearing fields.
 - Expired, stale, mismatched, incompatible, rejected, unknown, and used diagnoses/plans fail without media mutation.
 - The exact seven WebMCP contracts register once, share one abort lifecycle, and cannot duplicate across remounts.
-- A narrow `modelContext` test double proves handler wiring while a real browser proves the underlying WebRTC mutation and verification path.
+- A narrow `modelContext` test double proves handler wiring, and the optional Inspector test invokes the same path through the installed extension message channel.
 
 ## Browser Support
 

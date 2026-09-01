@@ -113,4 +113,55 @@ describe('stats sampler lifecycle', () => {
     expect(samples).toEqual([])
     await sampler.stop()
   })
+
+  it('reduces the selected ICE path to safe candidate categories only', async () => {
+    const outboundReport = new Map([
+      ['transport', { id: 'transport', type: 'transport', selectedCandidatePairId: 'pair' }],
+      ['pair', { id: 'pair', type: 'candidate-pair', localCandidateId: 'local', remoteCandidateId: 'remote' }],
+      ['local', {
+        id: 'local',
+        type: 'local-candidate',
+        candidateType: 'host',
+        protocol: 'udp',
+        address: '192.0.2.10',
+        port: 54321,
+      }],
+      ['remote', { id: 'remote', type: 'remote-candidate', candidateType: 'relay', protocol: 'udp' }],
+    ])
+    const sampler = createStatsSampler({
+      outboundPeer: { getStats: async () => outboundReport },
+      inboundPeer: { getStats: async () => new Map() },
+    })
+
+    const sample = await sampler.sample({ notify: false })
+
+    expect(sample.selectedCandidate).toEqual({
+      type: 'host',
+      protocol: 'udp',
+      path: 'relayed',
+      relayed: true,
+    })
+    expect(JSON.stringify(sample)).not.toContain('192.0.2.10')
+    expect(JSON.stringify(sample)).not.toContain('54321')
+  })
+
+  it('keeps direct/relayed unavailable when candidate types are not exposed', async () => {
+    const report = new Map([
+      ['transport', { id: 'transport', type: 'transport', selectedCandidatePairId: 'pair' }],
+      ['pair', { id: 'pair', type: 'candidate-pair', localCandidateId: 'local', remoteCandidateId: 'remote' }],
+      ['local', { id: 'local', type: 'local-candidate' }],
+      ['remote', { id: 'remote', type: 'remote-candidate' }],
+    ])
+    const sampler = createStatsSampler({
+      outboundPeer: { getStats: async () => report },
+      inboundPeer: { getStats: async () => new Map() },
+    })
+
+    expect((await sampler.sample({ notify: false })).selectedCandidate).toEqual({
+      type: null,
+      protocol: null,
+      path: null,
+      relayed: null,
+    })
+  })
 })

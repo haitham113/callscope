@@ -1,5 +1,44 @@
 import { serviceError } from '../../../shared/errors/serviceErrors.js'
 
+export const VIDEO_BITRATE_CAP_BPS = 80_000
+
+function clone(value) {
+  return structuredClone(value)
+}
+
+function bitrateOf(encodings) {
+  const limits = encodings
+    .map((encoding) => encoding.maxBitrate)
+    .filter(Number.isFinite)
+  return limits.length ? Math.min(...limits) : null
+}
+
+const ENCODING_PROFILE_FIELDS = Object.freeze([
+  'active',
+  'adaptivePtime',
+  'dtx',
+  'maxBitrate',
+  'maxFramerate',
+  'networkPriority',
+  'priority',
+  'rid',
+  'scaleResolutionDownBy',
+  'scalabilityMode',
+])
+
+function encodingProfileMatches(actual, expected) {
+  if (actual.length !== expected.length) return false
+  return expected.every((expectedEncoding, index) => {
+    const actualEncoding = actual[index] ?? {}
+    return ENCODING_PROFILE_FIELDS.every((field) => {
+      if (Object.hasOwn(expectedEncoding, field)) {
+        return actualEncoding[field] === expectedEncoding[field]
+      }
+      return field !== 'maxBitrate' || !Number.isFinite(actualEncoding.maxBitrate)
+    })
+  })
+}
+
 function abortableOperation(operation, signal) {
   if (!signal) return operation
   if (signal.aborted) return Promise.reject(new DOMException('Lab startup was cancelled.', 'AbortError'))
@@ -80,6 +119,7 @@ export async function createLoopbackPeerService(sourceStream, signal, { candidat
   const listeners = []
   const candidateErrors = []
   let cleanupErrors = []
+  let knownGoodVideoEncodingProfile = null
   const candidateOperations = new Set()
   const pendingForOutbound = []
   const pendingForInbound = []
@@ -168,6 +208,11 @@ export async function createLoopbackPeerService(sourceStream, signal, { candidat
     if (!await settleCandidateOperations({ abortSignal: signal })) {
       throw new Error('Timed out while settling in-memory ICE candidate operations.')
     }
+    const videoSender = outboundPeer.getSenders().find((sender) => sender.track?.kind === 'video')
+    if (!videoSender?.getParameters || !videoSender?.setParameters) {
+      throw serviceError('MEDIA_CAPABILITY_UNSUPPORTED')
+    }
+    knownGoodVideoEncodingProfile = clone(videoSender.getParameters().encodings ?? [])
   } catch (error) {
     error.peerCleanupReceipt = await cleanup()
     error.retryPeerCleanup = cleanup
@@ -215,6 +260,7 @@ export async function createLoopbackPeerService(sourceStream, signal, { candidat
       },
       tracks,
       receivers,
+      senders: { video: readVideoSenderState() },
       candidate_exchange_errors: candidateErrors.length,
       candidate_operations_pending: candidateOperations.size,
     }
@@ -232,6 +278,43 @@ export async function createLoopbackPeerService(sourceStream, signal, { candidat
         ].map((track) => [track.id, track]),
       ).values(),
     ]
+  }
+
+  function getVideoSenderOrThrow() {
+    const sender = outboundPeer.getSenders().find((item) => item.track?.kind === 'video')
+    if (!sender?.getParameters || !sender?.setParameters) {
+      throw serviceError('MEDIA_CAPABILITY_UNSUPPORTED')
+    }
+    return sender
+  }
+
+  function readVideoSenderState({ expectedProfile = null } = {}) {
+    const sender = getVideoSenderOrThrow()
+    const encodings = clone(sender.getParameters().encodings ?? [])
+    const maxBitrate = bitrateOf(encodings)
+    return {
+      attached: sender.track?.kind === 'video' && sender.track.readyState === 'live',
+      max_bitrate_bps: maxBitrate,
+      bitrate_limited: encodings.length > 0 && encodings.every(
+        (encoding) => encoding.maxBitrate === VIDEO_BITRATE_CAP_BPS,
+      ),
+      readback_confirmed: expectedProfile
+        ? encodingProfileMatches(encodings, expectedProfile)
+        : true,
+      profile_restored: encodingProfileMatches(encodings, knownGoodVideoEncodingProfile),
+      encoding_count: encodings.length,
+    }
+  }
+
+  async function writeVideoEncodingProfile(encodings) {
+    const sender = getVideoSenderOrThrow()
+    const previousState = readVideoSenderState()
+    const parameters = sender.getParameters()
+    parameters.encodings = clone(encodings)
+    await sender.setParameters(parameters)
+    const newState = readVideoSenderState({ expectedProfile: encodings })
+    if (!newState.readback_confirmed) throw serviceError('FAULT_MUTATION_FAILED')
+    return { previous_state: previousState, new_state: newState }
   }
 
   function createCleanupReceipt() {
@@ -286,6 +369,23 @@ export async function createLoopbackPeerService(sourceStream, signal, { candidat
     getSanitizedStatus,
     getVideoSender() {
       return outboundPeer.getSenders().find((sender) => sender.track?.kind === 'video')
+    },
+    getVideoSenderState() {
+      return readVideoSenderState()
+    },
+    getVideoSenderEncodingProfile() {
+      return clone(knownGoodVideoEncodingProfile)
+    },
+    applyVideoBitrateCap() {
+      const current = getVideoSenderOrThrow().getParameters().encodings ?? []
+      const encodings = (current.length ? current : [{}]).map((encoding) => ({
+        ...encoding,
+        maxBitrate: VIDEO_BITRATE_CAP_BPS,
+      }))
+      return writeVideoEncodingProfile(encodings)
+    },
+    restoreVideoBitrateProfile() {
+      return writeVideoEncodingProfile(knownGoodVideoEncodingProfile)
     },
     getOutboundTrackStatus(kind) {
       const track = sourceStream.getTracks().find((item) => item.kind === kind)

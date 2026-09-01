@@ -108,6 +108,39 @@ describe('recovery plan application guard', () => {
     })
   })
 
+  it('accepts a confirmed constrained-video plan only while the sender readback still matches', () => {
+    const videoDiagnosis = {
+      ...diagnosis(),
+      allowed_actions: ['restore_video_bitrate'],
+    }
+    const plan = createRecoveryPlan({
+      diagnosis: videoDiagnosis,
+      action: 'restore_video_bitrate',
+      reason: 'Restore known-good encodings',
+      expectedResult: 'Remove the confirmed cap',
+      now: () => 1_000,
+      createId: () => 'plan-video',
+    }).plan
+    plan.status = 'approved'
+    const actualVideo = {
+      attached: true,
+      max_bitrate_bps: 80_000,
+      bitrate_limited: true,
+      readback_confirmed: true,
+    }
+
+    expect(validatePlanForApplication({
+      plan,
+      ...validContext,
+      actualVideo,
+    })).toEqual({ ok: true })
+    expect(validatePlanForApplication({
+      plan,
+      ...validContext,
+      actualVideo: { ...actualVideo, bitrate_limited: false },
+    }).error.code).toBe('DIAGNOSIS_STALE')
+  })
+
   it.each([
     ['rejected', 'PLAN_NOT_APPROVED'],
     ['expired', 'PLAN_EXPIRED'],

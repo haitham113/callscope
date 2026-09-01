@@ -10,6 +10,39 @@ function addValue(existing, value) {
   return (existing ?? 0) + value
 }
 
+function selectedCandidateCategory(report) {
+  let selectedPair = null
+  report.forEach((entry) => {
+    if (entry.type === 'transport' && entry.selectedCandidatePairId) {
+      selectedPair = report.get?.(entry.selectedCandidatePairId) ?? selectedPair
+    }
+    if (
+      !selectedPair && entry.type === 'candidate-pair' &&
+      entry.state === 'succeeded' && (entry.selected === true || entry.nominated === true)
+    ) selectedPair = entry
+  })
+  if (!selectedPair) return null
+  const local = report.get?.(selectedPair.localCandidateId)
+  const remote = report.get?.(selectedPair.remoteCandidateId)
+  const safeTypes = ['host', 'srflx', 'prflx', 'relay']
+  const safeProtocols = ['udp', 'tcp']
+  const type = safeTypes.includes(local?.candidateType) ? local.candidateType : null
+  const protocolValue = String(local?.protocol ?? remote?.protocol ?? '').toLowerCase()
+  const protocol = safeProtocols.includes(protocolValue) ? protocolValue : null
+  const exposedTypes = [local?.candidateType, remote?.candidateType].filter((value) =>
+    safeTypes.includes(value),
+  )
+  const relayed = exposedTypes.length
+    ? exposedTypes.includes('relay')
+    : null
+  return {
+    type,
+    protocol,
+    path: relayed === null ? null : relayed ? 'relayed' : 'direct',
+    relayed,
+  }
+}
+
 function normalizeStats(outboundReport, inboundReport) {
   const snapshot = {
     capturedAt: performance.now(),
@@ -21,6 +54,7 @@ function normalizeStats(outboundReport, inboundReport) {
       totalAudioEnergy: null,
     },
     remote: { roundTripTimeMs: null },
+    selectedCandidate: selectedCandidateCategory(outboundReport),
   }
 
   outboundReport.forEach((report) => {

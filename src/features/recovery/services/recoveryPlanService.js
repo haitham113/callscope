@@ -1,4 +1,7 @@
-import { AUDIO_RECOVERY_ACTION } from '../../diagnostics/services/diagnosticRules.js'
+import {
+  AUDIO_RECOVERY_ACTION,
+  VIDEO_BITRATE_RECOVERY_ACTION,
+} from '../../diagnostics/services/diagnosticRules.js'
 import { errorResult } from '../../../shared/errors/serviceErrors.js'
 
 export const PLAN_LIFETIME_MS = 90_000
@@ -11,7 +14,10 @@ export function createRecoveryPlan({
   now = () => Date.now(),
   createId = () => crypto.randomUUID(),
 }) {
-  if (action !== AUDIO_RECOVERY_ACTION || !diagnosis.allowed_actions.includes(action)) {
+  if (
+    ![AUDIO_RECOVERY_ACTION, VIDEO_BITRATE_RECOVERY_ACTION].includes(action) ||
+    !diagnosis.allowed_actions.includes(action)
+  ) {
     return errorResult('ACTION_NOT_ALLOWED')
   }
   const createdAt = now()
@@ -25,6 +31,7 @@ export function createRecoveryPlan({
       diagnosis_id: diagnosis.id,
       snapshot_hash: diagnosis.snapshot_hash,
       action,
+      allowed_actions: [...diagnosis.allowed_actions],
       reason,
       expected_result: expectedResult,
       risk: 'low',
@@ -49,6 +56,7 @@ export function validatePlanForApplication({
   faultRevision,
   snapshotHash,
   actualAudio,
+  actualVideo,
   connection,
   now = Date.now(),
 }) {
@@ -73,13 +81,23 @@ export function validatePlanForApplication({
   if (plan.fault_revision !== faultRevision || plan.snapshot_hash !== snapshotHash) {
     return errorResult('DIAGNOSIS_STALE')
   }
-  if (plan.action !== AUDIO_RECOVERY_ACTION) {
+  if (
+    ![AUDIO_RECOVERY_ACTION, VIDEO_BITRATE_RECOVERY_ACTION].includes(plan.action) ||
+    !plan.allowed_actions?.includes(plan.action)
+  ) {
     return errorResult('ACTION_NOT_ALLOWED')
   }
-  if (
-    actualAudio?.enabled !== false ||
-    actualAudio?.ready_state !== 'live' ||
-    actualAudio?.attached !== true
+  if (plan.action === AUDIO_RECOVERY_ACTION) {
+    if (
+      actualAudio?.enabled !== false ||
+      actualAudio?.ready_state !== 'live' ||
+      actualAudio?.attached !== true
+    ) return errorResult('DIAGNOSIS_STALE')
+  } else if (
+    actualVideo?.attached !== true ||
+    actualVideo?.bitrate_limited !== true ||
+    actualVideo?.readback_confirmed !== true ||
+    !Number.isFinite(actualVideo?.max_bitrate_bps)
   ) {
     return errorResult('DIAGNOSIS_STALE')
   }

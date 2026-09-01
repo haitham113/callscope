@@ -147,6 +147,7 @@ export function createLabController(store) {
       peers: status.connection,
       tracks: status.tracks,
       receivers: status.receivers,
+      senders: status.senders,
       previous: previousSample,
       current: currentSample,
     })
@@ -155,6 +156,8 @@ export function createLabController(store) {
       tracks: status.tracks,
       checks: result.checks,
       metrics: deriveMetrics(previousSample, currentSample),
+      videoSender: status.senders.video,
+      selectedCandidate: currentSample.selectedCandidate,
     })
     return result
   }
@@ -585,12 +588,34 @@ export function createLabController(store) {
       if (!peers) throw new Error('No active peer connection is available.')
       return peers.setOutboundTrackEnabled('audio', enabled)
     },
+    readVideoState() {
+      if (!peers) {
+        return {
+          attached: false,
+          max_bitrate_bps: null,
+          bitrate_limited: false,
+          readback_confirmed: false,
+          profile_restored: false,
+          encoding_count: null,
+        }
+      }
+      return peers.getVideoSenderState()
+    },
+    applyVideoBitrateCap() {
+      if (!peers) throw new Error('No active peer connection is available.')
+      return peers.applyVideoBitrateCap()
+    },
+    restoreVideoBitrateProfile() {
+      if (!peers) throw new Error('No active peer connection is available.')
+      return peers.restoreVideoBitrateProfile()
+    },
   })
 
   const human = Object.freeze({
     start,
     end,
     breakAudioTrack: rescueRuntime.breakAudioTrack,
+    breakVideoBitrate: rescueRuntime.breakVideoBitrate,
     resetScenario: rescueRuntime.resetScenario,
     diagnoseAndStageRecovery: rescueRuntime.diagnoseAndStageRecovery,
     approvePlan: rescueRuntime.approvePlan,
@@ -642,6 +667,7 @@ export function createLabController(store) {
       connection: status.connection,
       tracks,
       receivers,
+      senders: status.senders,
       progression: store.latestSnapshot?.media_progression,
     }).health
     const common = {
@@ -657,23 +683,28 @@ export function createLabController(store) {
     }
     const connectionEvidence = {
       connection: status.connection,
-      selected_candidate: { type: null, protocol: null, relayed: null },
+      selected_candidate: currentSample?.selectedCandidate ?? {
+        type: null, protocol: null, path: null, relayed: null,
+      },
     }
     const mediaEvidence = {
       tracks,
       senders: {
         audio: { attached: tracks.audio.attached, max_bitrate_bps: null },
-        video: { attached: tracks.video.attached, max_bitrate_bps: null },
+        video: status.senders.video,
       },
       receivers,
     }
     const limitations = []
-    if (['summary', 'connection', 'all'].includes(detail)) {
-      limitations.push('Selected candidate type and protocol are unavailable in the current audio milestone.')
+    if (['summary', 'connection', 'all'].includes(detail) && !currentSample?.selectedCandidate) {
+      limitations.push('The browser did not expose a selected ICE candidate pair; candidate categories are unavailable.')
     }
-    if (['summary', 'media', 'all'].includes(detail)) {
-      limitations.push('Sender bitrate limits are unavailable until the secondary bitrate milestone.')
+    if (['summary', 'media', 'all'].includes(detail) && !status.senders.video.readback_confirmed) {
+      limitations.push('Fresh video sender-parameter readback was not confirmed by this browser.')
     }
+    if (!Number.isFinite(store.metrics.packetLoss)) limitations.push('Packet-loss delta is unavailable for the current sample window.')
+    if (!Number.isFinite(store.metrics.roundTripTimeMs)) limitations.push('Round-trip time is unavailable in this browser sample.')
+    if (!Number.isFinite(store.metrics.jitterMs)) limitations.push('Jitter is unavailable in this browser sample.')
     return sanitizeValue({
       ...common,
       ...(detail === 'summary' ? { connection: status.connection, tracks } : {}),

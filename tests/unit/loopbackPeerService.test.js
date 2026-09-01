@@ -47,7 +47,16 @@ function installFakeRtc({ pendingCandidates = false, failOneListenerRemoval = fa
     }
 
     addTrack(track) {
-      const sender = { track }
+      let parameters = {
+        encodings: track.kind === 'video'
+          ? [{ active: true, scaleResolutionDownBy: 1 }]
+          : [{}],
+      }
+      const sender = {
+        track,
+        getParameters() { return structuredClone(parameters) },
+        async setParameters(next) { parameters = structuredClone(next) },
+      }
       this.senders.push(sender)
       return sender
     }
@@ -91,6 +100,33 @@ afterEach(() => {
 })
 
 describe('loopback peer cleanup', () => {
+  it('preserves the known-good video encoding profile and confirms cap and restore from fresh readback', async () => {
+    installFakeRtc()
+    const service = await createLoopbackPeerService(sourceStream())
+
+    const capped = await service.applyVideoBitrateCap()
+    expect(capped.previous_state).toMatchObject({
+      max_bitrate_bps: null,
+      bitrate_limited: false,
+      readback_confirmed: true,
+    })
+    expect(capped.new_state).toMatchObject({
+      max_bitrate_bps: 80_000,
+      bitrate_limited: true,
+      readback_confirmed: true,
+    })
+
+    const restored = await service.restoreVideoBitrateProfile()
+    expect(restored.new_state).toMatchObject({
+      max_bitrate_bps: null,
+      bitrate_limited: false,
+      readback_confirmed: true,
+    })
+    expect(service.getVideoSenderEncodingProfile()).toEqual([
+      { active: true, scaleResolutionDownBy: 1 },
+    ])
+  })
+
   it('bounds pending ICE cleanup and reports the operation as still pending', async () => {
     vi.useFakeTimers()
     const peers = installFakeRtc({ pendingCandidates: true })

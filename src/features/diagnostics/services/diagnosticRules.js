@@ -1,4 +1,5 @@
 export const AUDIO_RECOVERY_ACTION = 'enable_audio_track'
+export const VIDEO_BITRATE_RECOVERY_ACTION = 'restore_video_bitrate'
 
 export function diagnoseDisabledAudio(snapshot, createId = () => crypto.randomUUID()) {
   const audio = snapshot.tracks.audio
@@ -55,6 +56,56 @@ export function diagnoseDisabledAudio(snapshot, createId = () => crypto.randomUU
     symptom: 'silent_audio',
     findings,
     allowed_actions: disabled ? [AUDIO_RECOVERY_ACTION] : [],
+    created_at: new Date().toISOString(),
+  }
+}
+
+export function diagnoseVideoBitrate(snapshot, createId = () => crypto.randomUUID()) {
+  const sender = snapshot.senders?.video
+  const confirmed = sender?.attached === true && sender?.readback_confirmed === true &&
+    sender?.bitrate_limited === true && Number.isFinite(sender?.max_bitrate_bps)
+  const finding = confirmed
+    ? {
+        rank: 1,
+        code: 'VIDEO_SENDER_BITRATE_CONSTRAINED',
+        title: 'Outbound video sender bitrate is constrained',
+        severity: 'warning',
+        confidence: 'high',
+        evidence: [
+          { field: 'senders.video.max_bitrate_bps', value: sender.max_bitrate_bps, role: 'primary' },
+          { field: 'senders.video.readback_confirmed', value: true, role: 'primary' },
+          { field: 'metrics.outbound_bitrate_kbps', value: snapshot.metrics.outbound_bitrate_kbps, role: 'supporting' },
+          { field: 'metrics.frame_rate', value: snapshot.metrics.frame_rate, role: 'supporting' },
+        ],
+        limitations: [
+          'Measured bitrate and frame rate are supporting evidence only and may be unavailable or unchanged in a local loopback.',
+          'Visible quality degradation is browser-dependent and is not required to confirm this sender configuration fault.',
+        ],
+        allowed_actions: [VIDEO_BITRATE_RECOVERY_ACTION],
+      }
+    : {
+        rank: 1,
+        code: 'VIDEO_BITRATE_CAP_NOT_CONFIRMED',
+        title: 'A video sender bitrate cap was not confirmed',
+        severity: 'info',
+        confidence: 'high',
+        evidence: [
+          { field: 'senders.video.max_bitrate_bps', value: sender?.max_bitrate_bps ?? null, role: 'primary' },
+          { field: 'senders.video.readback_confirmed', value: sender?.readback_confirmed ?? false, role: 'primary' },
+        ],
+        limitations: ['This rule diagnoses only a confirmed sender-parameter bitrate cap.'],
+        allowed_actions: [],
+      }
+
+  return {
+    id: createId(),
+    session_id: snapshot.session_id,
+    session_epoch: snapshot.session_epoch,
+    fault_revision: snapshot.fault_revision,
+    snapshot_hash: snapshot.snapshot_hash,
+    symptom: 'poor_video',
+    findings: [finding],
+    allowed_actions: confirmed ? [VIDEO_BITRATE_RECOVERY_ACTION] : [],
     created_at: new Date().toISOString(),
   }
 }

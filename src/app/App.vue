@@ -23,6 +23,8 @@ const {
   connection,
   tracks,
   metrics,
+  videoSender,
+  selectedCandidate,
   audioLevel,
   evidenceChecks,
   timeline,
@@ -58,11 +60,15 @@ const sessionShort = computed(() => sessionId.value?.slice(0, 8) ?? 'not started
 const endLabel = computed(() => (state.value === 'ended' ? 'Reset lab' : 'End / Reset'))
 const activeCall = computed(() => !['idle', 'starting', 'ended', 'failed'].includes(state.value))
 const canBreakAudio = computed(() => state.value === 'healthy' && !activeFault.value)
+const canBreakVideo = computed(() => state.value === 'healthy' && !activeFault.value)
 const canResetScenario = computed(() =>
   (Boolean(activeFault.value) || state.value === 'critical') &&
   !['idle', 'starting', 'ended', 'failed'].includes(state.value),
 )
-const canDiagnose = computed(() => state.value === 'critical' && activeFault.value === 'disabled_audio')
+const canDiagnose = computed(() =>
+  (state.value === 'critical' && activeFault.value === 'disabled_audio') ||
+  (state.value === 'degraded' && activeFault.value === 'constrained_video_bitrate'),
+)
 const approved = computed(() => recoveryPlan.value?.status === 'approved')
 const diagnosisFinding = computed(() => diagnosis.value?.findings?.[0] ?? null)
 
@@ -81,9 +87,9 @@ const metricCards = computed(() => [
   },
   {
     label: 'RTT / jitter',
-    value: formatMetric(metrics.value.latencyMs, 1),
-    unit: metrics.value.latencyMs === null ? '' : 'ms',
-    detail: 'RTT preferred, jitter used when exposed',
+    value: `RTT ${formatMetric(metrics.value.roundTripTimeMs, 1)} / jitter ${formatMetric(metrics.value.jitterMs, 1)}`,
+    unit: Number.isFinite(metrics.value.roundTripTimeMs) || Number.isFinite(metrics.value.jitterMs) ? 'ms' : '',
+    detail: 'Displayed independently when the browser exposes them',
   },
   {
     label: 'Video frame rate',
@@ -142,6 +148,10 @@ async function runOperation(operation) {
 
 function breakAudio() {
   return runOperation(() => human.breakAudioTrack())
+}
+
+function breakVideoBitrate() {
+  return runOperation(() => human.breakVideoBitrate())
 }
 
 async function resetScenario() {
@@ -283,18 +293,30 @@ onBeforeUnmount(() => {
             <span :class="{ ok: tracks.video.readyState === 'live' && tracks.video.enabled }">
               Video {{ tracks.video.readyState }}
             </span>
+            <span data-testid="video-sender-status" :class="{ ok: videoSender.readback_confirmed && !videoSender.bitrate_limited, faulted: videoSender.bitrate_limited }">
+              {{ videoSender.bitrate_limited
+                ? `${Number(videoSender.max_bitrate_bps).toLocaleString()} bps cap confirmed`
+                : videoSender.readback_confirmed
+                  ? videoSender.profile_restored
+                    ? 'Known-good profile confirmed'
+                    : 'Sender readback confirmed; profile differs'
+                  : 'Sender readback unavailable' }}
+            </span>
           </div>
         </div>
 
         <div v-if="activeCall" class="fault-controls" data-testid="fault-controls">
           <div>
             <span class="panel-kicker">Simulation controls</span>
-            <strong>Disabled-audio scenario</strong>
+            <strong>Audio and video sender scenarios</strong>
             <small>Fault revision {{ faultRevision }}</small>
           </div>
           <div>
             <button class="danger-button" type="button" data-testid="break-audio" :disabled="!canBreakAudio || operationPending" @click="breakAudio">
               Break audio track
+            </button>
+            <button class="danger-button" type="button" data-testid="break-video-bitrate" :disabled="!canBreakVideo || operationPending" @click="breakVideoBitrate">
+              Constrain video bitrate
             </button>
             <button v-if="canResetScenario" class="secondary-button" type="button" data-testid="reset-scenario" @click="resetScenario">
               Reset scenario to healthy
@@ -340,6 +362,14 @@ onBeforeUnmount(() => {
               {{ key.replaceAll('_', ' ') }}
             </li>
           </ul>
+          <div class="browser-evidence" data-testid="browser-limitations">
+            <p data-testid="selected-candidate">
+              ICE candidate: {{ selectedCandidate
+                ? `${selectedCandidate.type ?? 'unavailable'} · ${selectedCandidate.protocol ?? 'unavailable'} · ${selectedCandidate.path ?? 'unavailable'}`
+                : 'Unavailable in this browser sample' }}
+            </p>
+            <p>Optional stats do not change health: packet loss {{ evidenceLabel(metrics.packetLoss) }}, RTT {{ evidenceLabel(metrics.roundTripTimeMs) }}, jitter {{ evidenceLabel(metrics.jitterMs) }}.</p>
+          </div>
         </article>
 
         <article class="metric-grid" aria-label="Live call metrics">
@@ -362,16 +392,28 @@ onBeforeUnmount(() => {
             <section>
               <span>Before</span>
               <strong>{{ verification.before.health_status }} · {{ verification.before.health_score }}/100</strong>
-              <p>Audio enabled: {{ verification.before.audio_track.enabled }}</p>
-              <p>Attached/live: {{ verification.before.audio_track.attached }}/{{ verification.before.audio_track.ready_state }}</p>
+              <template v-if="verification.before.video_sender">
+                <p>Video cap: {{ evidenceLabel(verification.before.video_sender.max_bitrate_bps) }} bps</p>
+                <p>Readback confirmed: {{ verification.before.video_sender.readback_confirmed }}</p>
+              </template>
+              <template v-else>
+                <p>Audio enabled: {{ verification.before.audio_track.enabled }}</p>
+                <p>Attached/live: {{ verification.before.audio_track.attached }}/{{ verification.before.audio_track.ready_state }}</p>
+              </template>
               <p>Peers: {{ verification.before.connection.outbound }}/{{ verification.before.connection.inbound }}</p>
             </section>
             <span class="comparison-arrow" aria-hidden="true">→</span>
             <section>
               <span>After</span>
               <strong>{{ verification.after.health_status }} · {{ verification.after.health_score }}/100</strong>
-              <p>Audio enabled: {{ verification.after.audio_track.enabled }}</p>
-              <p>Fresh audio progression: {{ verification.after.audio_progression.outbound && verification.after.audio_progression.inbound ? 'confirmed' : 'incomplete' }}</p>
+              <template v-if="verification.after.video_sender">
+                <p>Video cap: {{ evidenceLabel(verification.after.video_sender.max_bitrate_bps) }}</p>
+                <p>Known-good readback: {{ verification.after.video_sender.readback_confirmed }}</p>
+              </template>
+              <template v-else>
+                <p>Audio enabled: {{ verification.after.audio_track.enabled }}</p>
+                <p>Fresh audio progression: {{ verification.after.audio_progression.outbound && verification.after.audio_progression.inbound ? 'confirmed' : 'incomplete' }}</p>
+              </template>
               <p>Peers: {{ verification.after.connection.outbound }}/{{ verification.after.connection.inbound }}</p>
             </section>
           </div>
@@ -380,14 +422,18 @@ onBeforeUnmount(() => {
               <span>{{ passed ? '✓' : '!' }}</span>{{ key.replaceAll('_', ' ') }}
             </li>
           </ul>
-          <p class="supporting-note">Audio energy: {{ evidenceLabel(verification.before.audio_energy_delta) }} before, {{ evidenceLabel(verification.after.audio_energy_delta) }} after — supporting evidence only.</p>
+          <p v-if="verification.supporting_evidence" class="supporting-note">
+            Bitrate {{ evidenceLabel(verification.supporting_evidence.outbound_bitrate_before_kbps) }} → {{ evidenceLabel(verification.supporting_evidence.outbound_bitrate_after_kbps) }} kbps;
+            frames {{ evidenceLabel(verification.supporting_evidence.frame_rate_before) }} → {{ evidenceLabel(verification.supporting_evidence.frame_rate_after) }} fps — supporting evidence only.
+          </p>
+          <p v-else class="supporting-note">Audio energy: {{ evidenceLabel(verification.before.audio_energy_delta) }} before, {{ evidenceLabel(verification.after.audio_energy_delta) }} after — supporting evidence only.</p>
         </article>
 
         <article v-if="incidentReport" class="panel report-panel" data-testid="incident-report">
           <div class="panel-heading">
             <div>
               <span class="panel-kicker">Sanitized incident report</span>
-              <h2>Audio rescue report</h2>
+              <h2>{{ incidentReport.approved_recovery.action === 'restore_video_bitrate' ? 'Video bitrate rescue report' : 'Audio rescue report' }}</h2>
             </div>
             <span class="report-id">{{ incidentReport.id.slice(0, 8) }}</span>
           </div>
@@ -396,7 +442,14 @@ onBeforeUnmount(() => {
             <div><dt>Timestamps</dt><dd>Started {{ formatDateTime(incidentReport.started_at) }} · Reported {{ formatDateTime(incidentReport.generated_at) }}</dd></div>
             <div><dt>Symptom</dt><dd>{{ incidentReport.symptom }}</dd></div>
             <div><dt>Root cause</dt><dd>{{ incidentReport.root_cause }}</dd></div>
-            <div><dt>Evidence</dt><dd>Outbound audio was enabled=false, readyState=live, and attached=true. Track state is primary; energy is supporting only.</dd></div>
+            <div>
+              <dt>Evidence</dt>
+              <dd>
+                {{ incidentReport.approved_recovery.action === 'restore_video_bitrate'
+                  ? 'Fresh sender parameters confirmed the bitrate cap and its removal. Measured bitrate and frames are supporting only.'
+                  : 'Outbound audio was enabled=false, readyState=live, and attached=true. Track state is primary; energy is supporting only.' }}
+              </dd>
+            </div>
             <div><dt>Approved recovery</dt><dd><code>{{ incidentReport.approved_recovery.action }}</code> · low risk · reversible</dd></div>
             <div><dt>Verification</dt><dd>{{ incidentReport.verification_result.verdict }} · score +{{ incidentReport.verification_result.health_score_delta }}</dd></div>
             <div><dt>Recommendation</dt><dd>{{ incidentReport.remaining_recommendations[0] }}</dd></div>
@@ -447,7 +500,7 @@ onBeforeUnmount(() => {
             <div>
               <strong>No plan staged</strong>
               <p v-if="activeFault">Run the manual diagnosis to capture fresh evidence and stage the compatible repair.</p>
-              <p v-else>Introduce the disabled-audio scenario to begin the manual rescue.</p>
+              <p v-else>Introduce either deterministic fault scenario to begin the manual rescue.</p>
             </div>
           </div>
           <div v-if="activeFault && !recoveryPlan" class="diagnose-action">
@@ -543,7 +596,13 @@ onBeforeUnmount(() => {
       <div class="agent-avatar" aria-hidden="true">✦</div>
       <div>
         <span>Suggested agent prompt</span>
-        <p>{{ approved ? '“Approved. Apply the repair, verify recovery, and generate the report.”' : '“Why is this call silent? Diagnose it and stage the safest repair.”' }}</p>
+        <p>
+          {{ approved
+            ? '“Approved. Apply the repair, verify recovery, and generate the report.”'
+            : activeFault === 'constrained_video_bitrate'
+              ? '“Why is this video constrained? Diagnose it and stage the safest repair.”'
+              : '“Why is this call silent? Diagnose it and stage the safest repair.”' }}
+        </p>
         <small v-if="webMcpSupported">Seven WebMCP tools are ready. Recovery approval remains human-only in CallScope.</small>
         <small v-else>WebMCP is not detected. The complete manual recovery remains available.</small>
       </div>
@@ -551,7 +610,7 @@ onBeforeUnmount(() => {
 
     <footer>
       <p>Generated media stays in this page. No recording, raw IP display, or external media service.</p>
-      <span>Milestone 4 · WebMCP audio rescue</span>
+      <span>Milestone 5 · Bitrate observability</span>
     </footer>
   </main>
 </template>

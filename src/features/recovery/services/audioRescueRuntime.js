@@ -1,4 +1,9 @@
-import { diagnoseDisabledAudio } from '../../diagnostics/services/diagnosticRules.js'
+import {
+  AUDIO_RECOVERY_ACTION,
+  VIDEO_BITRATE_RECOVERY_ACTION,
+  diagnoseDisabledAudio,
+  diagnoseVideoBitrate,
+} from '../../diagnostics/services/diagnosticRules.js'
 import { sanitizeValue } from '../../diagnostics/services/sanitizer.js'
 import {
   createIncidentReport,
@@ -7,7 +12,10 @@ import {
 import { createOperationCoordinator } from '../../../shared/async/operationCoordinator.js'
 import { errorResult, resultFromError, serviceError } from '../../../shared/errors/serviceErrors.js'
 import { createRecoveryPlan, validatePlanForApplication } from './recoveryPlanService.js'
-import { verifyDisabledAudioRecovery } from './recoveryVerification.js'
+import {
+  verifyDisabledAudioRecovery,
+  verifyVideoBitrateRecovery,
+} from './recoveryVerification.js'
 
 const RECOVERY_SAMPLE_ATTEMPTS = 3
 const DEFAULT_SAMPLE_DURATION_MS = 1150
@@ -19,13 +27,66 @@ function canAwaitFreshAudioProgression(snapshot) {
     (snapshot.media_progression.outbound_audio !== true || snapshot.media_progression.inbound_audio !== true)
 }
 
+function normalizeScenarioResetSnapshot(snapshot) {
+  const onlyNoisyProgression = snapshot.health.status === 'degraded' &&
+    snapshot.health.deductions?.length > 0 &&
+    snapshot.health.deductions.every((item) => item.code === 'MEDIA_PROGRESSION_INCOMPLETE')
+  if (!onlyNoisyProgression) return snapshot
+
+  const peersConnected = snapshot.connection.outbound === 'connected' &&
+    snapshot.connection.inbound === 'connected'
+  const tracksRestored = ['audio', 'video'].every((kind) => {
+    const track = snapshot.tracks[kind]
+    return track.ready_state === 'live' && track.enabled === true && track.attached === true
+  })
+  const receiversLive = ['audio', 'video'].every(
+    (kind) => snapshot.receivers[kind].ready_state === 'live',
+  )
+  const videoSender = snapshot.senders?.video
+  const senderRestored = videoSender?.attached === true &&
+    videoSender.bitrate_limited === false &&
+    videoSender.readback_confirmed === true &&
+    videoSender.profile_restored === true
+
+  if (!onlyNoisyProgression || !peersConnected || !tracksRestored || !receiversLive || !senderRestored) {
+    return snapshot
+  }
+
+  return sanitizeValue({
+    ...snapshot,
+    health: { status: 'healthy', score: 100, deductions: [] },
+    reset_verification: {
+      primary_state_restored: true,
+      progression_is_supporting_evidence: true,
+      observed_media_progression: snapshot.media_progression,
+      limitation: 'A transient loopback counter window did not override confirmed peer, track, receiver, and sender restoration.',
+    },
+  })
+}
+
 function cancellationResult(error) {
   return error?.code === 'OPERATION_CANCELLED' || error?.name === 'AbortError'
     ? errorResult('OPERATION_CANCELLED')
     : null
 }
 
-export function createAudioRescueRuntime({ store, captureSnapshot, readAudioState, setAudioEnabled, now = () => Date.now() }) {
+export function createAudioRescueRuntime({
+  store,
+  captureSnapshot,
+  readAudioState,
+  setAudioEnabled,
+  readVideoState = () => ({
+    attached: false,
+    max_bitrate_bps: null,
+    bitrate_limited: false,
+    readback_confirmed: false,
+    profile_restored: false,
+    encoding_count: null,
+  }),
+  applyVideoBitrateCap,
+  restoreVideoBitrateProfile,
+  now = () => Date.now(),
+}) {
   const operations = createOperationCoordinator({
     readIdentity: () => ({ sessionId: store.sessionId, sessionEpoch: store.sessionEpoch, faultRevision: store.faultRevision }),
   })
@@ -43,6 +104,28 @@ export function createAudioRescueRuntime({ store, captureSnapshot, readAudioStat
         value: { ready_state: 'unavailable', enabled: null, attached: false },
       }
     }
+  }
+
+  function safeReadVideoState() {
+    try {
+      return { ok: true, value: readVideoState() }
+    } catch {
+      return {
+        ok: false,
+        value: {
+          attached: false,
+          max_bitrate_bps: null,
+          bitrate_limited: false,
+          readback_confirmed: false,
+          profile_restored: false,
+          encoding_count: null,
+        },
+      }
+    }
+  }
+
+  function isVideoFault() {
+    return store.activeFault === 'constrained_video_bitrate'
   }
 
   function clearPlanExpiry() {
@@ -155,14 +238,88 @@ export function createAudioRescueRuntime({ store, captureSnapshot, readAudioStat
     } finally { operations.finish(operation) }
   }
 
+  async function breakVideoBitrate() {
+    if (store.state !== 'healthy' || store.activeFault) {
+      return reject(errorResult('INVALID_STATE_TRANSITION'), 'Video bitrate fault rejected')
+    }
+    if (typeof applyVideoBitrateCap !== 'function' || typeof restoreVideoBitrateProfile !== 'function') {
+      return reject(errorResult('MEDIA_CAPABILITY_UNSUPPORTED'), 'Video bitrate fault rejected')
+    }
+    const beforeRead = safeReadVideoState()
+    if (!beforeRead.ok || beforeRead.value.attached !== true) {
+      return reject(errorResult('FAULT_MUTATION_FAILED'), 'Video bitrate fault rejected')
+    }
+    const mutationWindow = beginWindow('fault_mutation', 'Video bitrate fault failed')
+    if (!mutationWindow.ok) return mutationWindow
+    const { operation: mutationOperation } = mutationWindow
+    let mutation
+    try {
+      mutation = await applyVideoBitrateCap()
+      assertOwned(mutationOperation)
+    } catch (error) {
+      const result = failure(error, 'FAULT_MUTATION_FAILED')
+      if (operations.isCurrent(mutationOperation)) {
+        try { await restoreVideoBitrateProfile() } catch { /* Reset/restart remains available. */ }
+        const actual = safeReadVideoState()
+        store.failVideoBitrateFault(result, actual.value, { mutationUncertain: !actual.ok })
+      }
+      return result
+    } finally {
+      operations.finish(mutationOperation)
+    }
+    const afterRead = safeReadVideoState()
+    if (
+      !afterRead.ok || afterRead.value.attached !== true ||
+      afterRead.value.bitrate_limited !== true ||
+      afterRead.value.readback_confirmed !== true ||
+      !Number.isFinite(afterRead.value.max_bitrate_bps)
+    ) {
+      try { await restoreVideoBitrateProfile() } catch { /* Reset/restart remains available. */ }
+      const result = errorResult('FAULT_MUTATION_FAILED')
+      const actual = safeReadVideoState()
+      store.failVideoBitrateFault(result, actual.value, { mutationUncertain: !actual.ok })
+      return result
+    }
+
+    store.beginVideoBitrateFault(afterRead.value)
+    const window = beginWindow('fault_baseline', 'Video bitrate fault failed')
+    if (!window.ok) {
+      try { await restoreVideoBitrateProfile() } catch { /* Reset/restart remains available. */ }
+      const actual = safeReadVideoState()
+      store.failVideoBitrateFault(window, actual.value, { mutationUncertain: !actual.ok })
+      return window
+    }
+    const { operation } = window
+    try {
+      const snapshot = await captureOwned(operation, { stabilize: true, phase: 'fault_baseline' })
+      store.captureFailureBaseline(snapshot)
+      return success({
+        ok: true,
+        previous_state: mutation?.previous_state ?? beforeRead.value,
+        new_state: afterRead.value,
+        failure_snapshot: snapshot,
+      })
+    } catch (error) {
+      const result = failure(error, 'FAULT_MUTATION_FAILED')
+      if (operations.isCurrent(operation)) {
+        try { await restoreVideoBitrateProfile() } catch { /* Reset/restart remains available. */ }
+        const actual = safeReadVideoState()
+        store.failVideoBitrateFault(result, actual.value, { mutationUncertain: !actual.ok })
+      }
+      return result
+    } finally { operations.finish(operation) }
+  }
+
   async function runDiagnosticsForActor({
     sessionId = store.sessionId,
-    symptom = 'silent_audio',
+    symptom = isVideoFault() ? 'poor_video' : 'silent_audio',
     sampleDurationMs = DEFAULT_SAMPLE_DURATION_MS,
   } = {}, actor) {
     const session = validateSession(sessionId)
     if (!session.ok) return reject(session, 'Diagnosis rejected')
-    if (store.state !== 'critical' || store.activeFault !== 'disabled_audio' || symptom !== 'silent_audio') {
+    const validAudio = store.state === 'critical' && store.activeFault === 'disabled_audio' && symptom === 'silent_audio'
+    const validVideo = store.state === 'degraded' && isVideoFault() && symptom === 'poor_video'
+    if (!validAudio && !validVideo) {
       return reject(errorResult('INVALID_STATE_TRANSITION'), 'Diagnosis rejected')
     }
     const window = beginWindow('diagnostic', 'Diagnosis rejected')
@@ -176,7 +333,9 @@ export function createAudioRescueRuntime({ store, captureSnapshot, readAudioStat
         phase: 'diagnostic',
         sampleDurationMs,
       })
-      const diagnosis = diagnoseDisabledAudio(snapshot)
+      const diagnosis = validVideo
+        ? diagnoseVideoBitrate(snapshot)
+        : diagnoseDisabledAudio(snapshot)
       assertOwned(operation)
       store.completeDiagnosis(diagnosis, snapshot, actor)
       return success({
@@ -188,8 +347,8 @@ export function createAudioRescueRuntime({ store, captureSnapshot, readAudioStat
     } catch (error) {
       const result = failure(error, 'STATS_UNAVAILABLE')
       if (operations.isCurrent(operation)) {
-        if (store.state === 'diagnosing') store.transition('critical')
-        store.healthStatus = 'Critical'
+        if (store.state === 'diagnosing') store.transition(isVideoFault() ? 'degraded' : 'critical')
+        store.healthStatus = isVideoFault() ? 'Degraded' : 'Critical'
         store.recordOperationError(result, 'Diagnosis failed')
       }
       return result
@@ -207,9 +366,13 @@ export function createAudioRescueRuntime({ store, captureSnapshot, readAudioStat
   function stageRecoveryPlanForActor({
     sessionId = store.sessionId,
     diagnosisId,
-    action = 'enable_audio_track',
-    reason = 'The live outbound audio track is disabled while remaining live and attached to its intended sender.',
-    expectedResult = 'Re-enable audio transmission while keeping both peer connections and the existing sender intact.',
+    action = store.diagnosis?.allowed_actions?.[0] ?? AUDIO_RECOVERY_ACTION,
+    reason = isVideoFault()
+      ? 'Fresh sender-parameter readback confirms the outbound video encoding is capped.'
+      : 'The live outbound audio track is disabled while remaining live and attached to its intended sender.',
+    expectedResult = isVideoFault()
+      ? 'Restore the preserved known-good encoding profile and confirm it with immediate sender readback.'
+      : 'Re-enable audio transmission while keeping both peer connections and the existing sender intact.',
   } = {}, actor = 'System') {
     const session = validateSession(sessionId)
     if (!session.ok) return reject(session, 'Recovery staging rejected')
@@ -219,12 +382,15 @@ export function createAudioRescueRuntime({ store, captureSnapshot, readAudioStat
         diagnosis.fault_revision !== store.faultRevision || diagnosis.snapshot_hash !== store.latestSnapshot?.snapshot_hash) {
       return reject(errorResult('DIAGNOSIS_STALE'), 'Recovery staging rejected')
     }
-    const actualAudio = readAudioState()
-    if (actualAudio.enabled !== false || actualAudio.ready_state !== 'live' || actualAudio.attached !== true ||
-        store.connection.outbound !== 'connected' || store.connection.inbound !== 'connected') {
+    const actualAudio = safeReadAudioState().value
+    const actualVideo = safeReadVideoState().value
+    const faultStillMatches = isVideoFault()
+      ? actualVideo.attached === true && actualVideo.bitrate_limited === true && actualVideo.readback_confirmed === true
+      : actualAudio.enabled === false && actualAudio.ready_state === 'live' && actualAudio.attached === true
+    if (!faultStillMatches || store.connection.outbound !== 'connected' || store.connection.inbound !== 'connected') {
       return reject(errorResult('DIAGNOSIS_STALE'), 'Recovery staging rejected')
     }
-    if (store.state !== 'critical') return reject(errorResult('INVALID_STATE_TRANSITION'), 'Recovery staging rejected')
+    if (!['critical', 'degraded'].includes(store.state)) return reject(errorResult('INVALID_STATE_TRANSITION'), 'Recovery staging rejected')
     const safeText = sanitizeValue({ reason, expectedResult })
     const planResult = createRecoveryPlan({
       diagnosis,
@@ -248,10 +414,17 @@ export function createAudioRescueRuntime({ store, captureSnapshot, readAudioStat
   }
 
   async function diagnoseAndStageRecovery() {
-    const diagnostic = await runDiagnostics({ sessionId: store.sessionId, symptom: 'silent_audio' })
+    const diagnostic = await runDiagnostics({
+      sessionId: store.sessionId,
+      symptom: isVideoFault() ? 'poor_video' : 'silent_audio',
+    })
     if (!diagnostic.ok) return diagnostic
     if (diagnostic.diagnosis.allowed_actions.length === 0) return reject(errorResult('ACTION_NOT_ALLOWED'), 'Recovery staging rejected')
-    const staged = stageRecoveryPlan({ sessionId: store.sessionId, diagnosisId: diagnostic.diagnosis.id, action: 'enable_audio_track' })
+    const staged = stageRecoveryPlan({
+      sessionId: store.sessionId,
+      diagnosisId: diagnostic.diagnosis.id,
+      action: diagnostic.diagnosis.allowed_actions[0],
+    })
     return staged.ok ? success({ ok: true, diagnosis: diagnostic.diagnosis, plan: staged.plan }) : staged
   }
 
@@ -268,10 +441,15 @@ export function createAudioRescueRuntime({ store, captureSnapshot, readAudioStat
     const plan = store.recoveryPlan
     if (!plan || plan.id !== planId) return reject(errorResult('PLAN_NOT_FOUND'), 'Approval rejected')
     if (expireIfNeeded(plan)) return reject(errorResult('PLAN_EXPIRED'), 'Approval rejected')
-    const before = safeReadAudioState()
+    const before = isVideoFault() ? safeReadVideoState() : safeReadAudioState()
     if (!before.ok) return reject(errorResult('STATS_UNAVAILABLE'), 'Approval rejected')
     if (!store.approvePlan(planId)) return reject(errorResult('PLAN_NOT_APPROVED'), 'Approval rejected')
-    return success({ ok: true, status: 'approved', media_state_unchanged: true, audio_track: before.value })
+    return success({
+      ok: true,
+      status: 'approved',
+      media_state_unchanged: true,
+      ...(isVideoFault() ? { video_sender: before.value } : { audio_track: before.value }),
+    })
   }
 
   function rejectPlan(planId = store.recoveryPlan?.id) {
@@ -280,7 +458,11 @@ export function createAudioRescueRuntime({ store, captureSnapshot, readAudioStat
     if (expireIfNeeded(plan)) return reject(errorResult('PLAN_EXPIRED'), 'Rejection failed')
     if (!store.rejectPlan(planId)) return reject(errorResult('PLAN_NOT_APPROVED'), 'Rejection failed')
     clearPlanExpiry()
-    return success({ ok: true, status: 'rejected', audio_track: readAudioState() })
+    return success({
+      ok: true,
+      status: 'rejected',
+      ...(isVideoFault() ? { video_sender: safeReadVideoState().value } : { audio_track: readAudioState() }),
+    })
   }
 
   function validateActivePlan({ sessionId, planId, snapshotHash }) {
@@ -294,7 +476,8 @@ export function createAudioRescueRuntime({ store, captureSnapshot, readAudioStat
       sessionEpoch: store.sessionEpoch,
       faultRevision: store.faultRevision,
       snapshotHash,
-      actualAudio: readAudioState(),
+      actualAudio: safeReadAudioState().value,
+      actualVideo: safeReadVideoState().value,
       connection: store.connection,
       now: now(),
     })
@@ -344,6 +527,7 @@ export function createAudioRescueRuntime({ store, captureSnapshot, readAudioStat
     let mutated = false
     let mutationUncertain = false
     let actualBefore = null
+    const recoveryAction = store.recoveryPlan?.action
     try {
       const currentSnapshot = await captureOwned(operation, { stabilize: false, phase: 'recovery_preflight' })
       const validation = validateActivePlan({ sessionId, planId, snapshotHash: currentSnapshot.snapshot_hash })
@@ -351,27 +535,35 @@ export function createAudioRescueRuntime({ store, captureSnapshot, readAudioStat
 
       assertOwned(operation)
       const plan = store.recoveryPlan
-      actualBefore = readAudioState()
+      const restoringVideo = plan.action === VIDEO_BITRATE_RECOVERY_ACTION
+      actualBefore = restoringVideo ? safeReadVideoState().value : readAudioState()
       clearPlanExpiry()
       store.beginRecovery()
       try {
-        setAudioEnabled(true)
+        if (restoringVideo) {
+          if (typeof restoreVideoBitrateProfile !== 'function') throw serviceError('MEDIA_CAPABILITY_UNSUPPORTED')
+          await restoreVideoBitrateProfile()
+        } else {
+          setAudioEnabled(true)
+        }
       } catch (error) {
-        const readback = safeReadAudioState()
-        mutated = readback.ok && readback.value.enabled !== actualBefore.enabled
+        const readback = restoringVideo ? safeReadVideoState() : safeReadAudioState()
+        mutated = readback.ok && JSON.stringify(readback.value) !== JSON.stringify(actualBefore)
         mutationUncertain = !readback.ok
         throw serviceError('RECOVERY_FAILED', { cause: error })
       }
-      const readback = safeReadAudioState()
+      const readback = restoringVideo ? safeReadVideoState() : safeReadAudioState()
       if (!readback.ok) {
         mutationUncertain = true
         throw serviceError('RECOVERY_FAILED')
       }
       const actualAfter = readback.value
-      mutated = actualAfter.enabled !== actualBefore.enabled ||
-        actualAfter.ready_state !== actualBefore.ready_state ||
-        actualAfter.attached !== actualBefore.attached
-      if (actualAfter.enabled !== true || actualAfter.ready_state !== 'live' || actualAfter.attached !== true) throw serviceError('RECOVERY_FAILED')
+      mutated = JSON.stringify(actualAfter) !== JSON.stringify(actualBefore)
+      const restored = restoringVideo
+        ? actualAfter.attached === true && actualAfter.bitrate_limited === false &&
+          actualAfter.readback_confirmed === true && actualAfter.profile_restored === true
+        : actualAfter.enabled === true && actualAfter.ready_state === 'live' && actualAfter.attached === true
+      if (!restored) throw serviceError('RECOVERY_FAILED')
       assertOwned(operation)
       store.markRecoveryApplied(actualBefore, actualAfter)
 
@@ -384,9 +576,11 @@ export function createAudioRescueRuntime({ store, captureSnapshot, readAudioStat
           phase: 'recovery_verification',
           sampleDurationMs: DEFAULT_SAMPLE_DURATION_MS,
         })
-        if (!canAwaitFreshAudioProgression(recoveredSnapshot)) break
+        if (restoringVideo || !canAwaitFreshAudioProgression(recoveredSnapshot)) break
       }
-      const verification = verifyDisabledAudioRecovery({ failureSnapshot: store.failureBaseline, recoveredSnapshot })
+      const verification = restoringVideo
+        ? verifyVideoBitrateRecovery({ failureSnapshot: store.failureBaseline, recoveredSnapshot })
+        : verifyDisabledAudioRecovery({ failureSnapshot: store.failureBaseline, recoveredSnapshot })
       assertOwned(operation)
       store.completeVerification(verification, recoveredSnapshot)
       const report = publishReport ? getOrCreateIncidentReport() : null
@@ -409,7 +603,9 @@ export function createAudioRescueRuntime({ store, captureSnapshot, readAudioStat
             mutationObserved: mutated,
             mutationUncertain,
             previousState: actualBefore,
-            newState: safeReadAudioState().value,
+            newState: recoveryAction === VIDEO_BITRATE_RECOVERY_ACTION
+              ? safeReadVideoState().value
+              : safeReadAudioState().value,
           })
         }
         else store.recordOperationError(result, 'Recovery application failed')
@@ -449,10 +645,9 @@ export function createAudioRescueRuntime({ store, captureSnapshot, readAudioStat
         phase: 'comparison',
         sampleDurationMs,
       })
-      const verification = verifyDisabledAudioRecovery({
-        failureSnapshot: store.failureBaseline,
-        recoveredSnapshot: snapshot,
-      })
+      const verification = plan.action === VIDEO_BITRATE_RECOVERY_ACTION
+        ? verifyVideoBitrateRecovery({ failureSnapshot: store.failureBaseline, recoveredSnapshot: snapshot })
+        : verifyDisabledAudioRecovery({ failureSnapshot: store.failureBaseline, recoveredSnapshot: snapshot })
       assertOwned(operation)
       store.refreshVerification(verification, snapshot)
       return success({ ok: true, verification, snapshot })
@@ -466,36 +661,56 @@ export function createAudioRescueRuntime({ store, captureSnapshot, readAudioStat
   async function resetScenario() {
     if (!store.sessionId || ['idle', 'starting', 'ended', 'failed'].includes(store.state)) return reject(errorResult('INVALID_STATE_TRANSITION'), 'Scenario reset rejected')
     if (!store.activeFault && store.state === 'healthy') return success({ ok: true, snapshot: store.latestSnapshot })
+    const resetFault = store.activeFault
     cancelAll('Scenario reset requested.')
-    try {
-      setAudioEnabled(true)
-    } catch (error) {
-      const result = resultFromError(error, 'FAULT_MUTATION_FAILED')
-      const actual = safeReadAudioState()
-      store.failScenarioReset(result, actual.value, { mutationUncertain: !actual.ok })
-      return result
-    }
     store.beginScenarioReset()
     const window = beginWindow('verification', 'Scenario reset failed')
     if (!window.ok) return window
     const { operation } = window
+    let mutationConfirmed = false
     try {
+      if (resetFault === 'constrained_video_bitrate') {
+        if (typeof restoreVideoBitrateProfile !== 'function') throw serviceError('MEDIA_CAPABILITY_UNSUPPORTED')
+        await restoreVideoBitrateProfile()
+        assertOwned(operation)
+        const restored = safeReadVideoState()
+        if (!restored.ok || restored.value.attached !== true || restored.value.bitrate_limited !== false ||
+            restored.value.readback_confirmed !== true || restored.value.profile_restored !== true) {
+          throw serviceError('FAULT_MUTATION_FAILED')
+        }
+      } else {
+        setAudioEnabled(true)
+        assertOwned(operation)
+        const restored = safeReadAudioState()
+        if (!restored.ok || restored.value.enabled !== true || restored.value.ready_state !== 'live' ||
+            restored.value.attached !== true) throw serviceError('FAULT_MUTATION_FAILED')
+      }
+      mutationConfirmed = true
       let snapshot
       for (let attempt = 0; attempt < RECOVERY_SAMPLE_ATTEMPTS; attempt += 1) {
         snapshot = await captureOwned(operation, { stabilize: true, phase: 'scenario_reset' })
-        if (!canAwaitFreshAudioProgression(snapshot)) break
+        if (snapshot.health.status === 'healthy') break
+        const retryableVideoProgression = resetFault === 'constrained_video_bitrate' &&
+          snapshot.health.deductions?.every((item) => item.code === 'MEDIA_PROGRESSION_INCOMPLETE')
+        if (!retryableVideoProgression &&
+            (resetFault !== 'disabled_audio' || !canAwaitFreshAudioProgression(snapshot))) break
       }
+      snapshot = normalizeScenarioResetSnapshot(snapshot)
       store.completeScenarioReset(snapshot)
       if (snapshot.health.status !== 'healthy') {
         return reject(errorResult('VERIFICATION_INCOMPLETE'), 'Scenario reset failed')
       }
       return success({ ok: true, snapshot })
     } catch (error) {
-      const result = failure(error, 'VERIFICATION_INCOMPLETE')
+      const result = failure(error, mutationConfirmed ? 'VERIFICATION_INCOMPLETE' : 'FAULT_MUTATION_FAILED')
       if (operations.isCurrent(operation)) {
-        if (store.state === 'verifying') store.transition('critical')
-        store.healthStatus = 'Critical'
-        store.recordOperationError(result, 'Scenario reset failed')
+        const actual = resetFault === 'constrained_video_bitrate'
+          ? safeReadVideoState()
+          : safeReadAudioState()
+        store.failScenarioReset(result, actual.value, {
+          faultKind: resetFault,
+          mutationUncertain: !actual.ok,
+        })
       }
       return result
     } finally { operations.finish(operation) }
@@ -503,6 +718,7 @@ export function createAudioRescueRuntime({ store, captureSnapshot, readAudioStat
 
   return Object.freeze({
     breakAudioTrack,
+    breakVideoBitrate,
     resetScenario,
     runDiagnostics,
     runAgentDiagnostics,

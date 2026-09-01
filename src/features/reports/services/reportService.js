@@ -11,13 +11,16 @@ export function createIncidentReport({
 }) {
   const finding = diagnosis.findings[0]
   const recovered = verification.verdict === 'recovered'
+  const videoIncident = diagnosis.symptom === 'poor_video'
   return sanitizeValue({
     id: `incident-${sessionId}-${incidentRevision}`,
     session_id: sessionId,
     incident_revision: incidentRevision,
     started_at: startedAt,
     generated_at: now().toISOString(),
-    symptom: 'Remote audio became silent after the demo audio fault was introduced.',
+    symptom: videoIncident
+      ? 'Outbound video was constrained after the demo bitrate fault was introduced.'
+      : 'Remote audio became silent after the demo audio fault was introduced.',
     root_cause: finding.title,
     sanitized_evidence: finding.evidence,
     approved_recovery: {
@@ -29,7 +32,9 @@ export function createIncidentReport({
     },
     verification_result: verification,
     remaining_recommendations: recovered
-      ? ['No remaining audio fault detected. Continue monitoring the live session.']
+      ? [videoIncident
+          ? 'No remaining video bitrate cap detected. Continue monitoring the live session.'
+          : 'No remaining audio fault detected. Continue monitoring the live session.']
       : ['Reset the scenario or restart the lab before attempting another recovery.'],
     sanitization: {
       generated_media_only: true,

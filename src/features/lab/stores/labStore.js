@@ -9,12 +9,25 @@ function emptyMetrics() {
     outboundBitrateKbps: null,
     packetLoss: null,
     latencyMs: null,
+    roundTripTimeMs: null,
+    jitterMs: null,
     frameRate: null,
   }
 }
 
 function emptyConnection() {
   return { outbound: 'new', inbound: 'new', ice: 'new' }
+}
+
+function emptyVideoSender() {
+  return {
+    attached: false,
+    max_bitrate_bps: null,
+    bitrate_limited: false,
+    readback_confirmed: false,
+    profile_restored: false,
+    encoding_count: null,
+  }
 }
 
 function emptyTracks() {
@@ -83,6 +96,8 @@ export const useLabStore = defineStore('lab', {
     connection: emptyConnection(),
     tracks: emptyTracks(),
     metrics: emptyMetrics(),
+    videoSender: emptyVideoSender(),
+    selectedCandidate: null,
     audioLevel: 0,
     evidenceChecks: emptyEvidenceChecks(),
     healthyBaseline: null,
@@ -116,6 +131,8 @@ export const useLabStore = defineStore('lab', {
       this.connection = emptyConnection()
       this.tracks = emptyTracks()
       this.metrics = emptyMetrics()
+      this.videoSender = emptyVideoSender()
+      this.selectedCandidate = null
       this.audioLevel = 0
       this.evidenceChecks = emptyEvidenceChecks()
       this.healthyBaseline = null
@@ -134,11 +151,13 @@ export const useLabStore = defineStore('lab', {
       assertTransition(this.state, next)
       this.state = next
     },
-    setLiveEvidence({ connection, tracks, checks, metrics }) {
+    setLiveEvidence({ connection, tracks, checks, metrics, videoSender, selectedCandidate }) {
       this.connection = connection
       this.tracks = tracks
       this.evidenceChecks = checks
       this.metrics = metrics
+      if (videoSender) this.videoSender = videoSender
+      this.selectedCandidate = selectedCandidate ?? null
     },
     setLatestSnapshot(snapshot) {
       this.latestSnapshot = snapshot
@@ -170,10 +189,29 @@ export const useLabStore = defineStore('lab', {
         { track_kind: 'audio', enabled: false },
       )
     },
+    beginVideoBitrateFault(senderState) {
+      this.transition('degraded')
+      this.faultRevision += 1
+      this.activeFault = 'constrained_video_bitrate'
+      this.healthStatus = 'Degraded'
+      this.healthScore = 70
+      this.failureBaseline = null
+      this.diagnosis = null
+      this.recoveryPlan = null
+      this.verification = null
+      this.incidentReport = null
+      this.error = null
+      appendUserTimeline(
+        this,
+        'Video bitrate fault introduced',
+        'RTCRtpSender.setParameters() applied a low maxBitrate and fresh readback confirmed it.',
+        { sender: senderState },
+      )
+    },
     captureFailureBaseline(snapshot) {
       this.failureBaseline = snapshot
       this.latestSnapshot = snapshot
-      this.healthStatus = 'Critical'
+      this.healthStatus = snapshot.health.status === 'degraded' ? 'Degraded' : 'Critical'
       this.healthScore = snapshot.health.score
       appendSystemTimeline(
         this,
@@ -201,6 +239,29 @@ export const useLabStore = defineStore('lab', {
         rollback_confirmed: rollbackConfirmed,
       })
     },
+    failVideoBitrateFault(result, actualVideo, { mutationUncertain = false } = {}) {
+      const rollbackConfirmed = !mutationUncertain &&
+        actualVideo?.attached === true &&
+        actualVideo?.bitrate_limited === false &&
+        actualVideo?.readback_confirmed === true &&
+        actualVideo?.profile_restored === true
+      if (rollbackConfirmed && this.state === 'degraded') this.transition('healthy')
+      if (!rollbackConfirmed && this.state === 'healthy') this.transition('degraded')
+      this.activeFault = rollbackConfirmed ? null : 'constrained_video_bitrate'
+      this.failureBaseline = null
+      this.faultRevision += 1
+      this.diagnosis = null
+      this.recoveryPlan = null
+      this.verification = null
+      this.incidentReport = null
+      this.healthStatus = rollbackConfirmed ? 'Healthy' : 'Degraded'
+      this.healthScore = rollbackConfirmed ? 100 : 70
+      this.recordOperationError(result, 'Video bitrate fault failed', {
+        current_state: actualVideo,
+        mutation_uncertain: mutationUncertain,
+        rollback_confirmed: rollbackConfirmed,
+      })
+    },
     beginDiagnosis(actor = 'User') {
       this.transition('diagnosing')
       this.healthStatus = 'Diagnosing'
@@ -216,13 +277,16 @@ export const useLabStore = defineStore('lab', {
     completeDiagnosis(diagnosis, snapshot, actor = 'System') {
       this.diagnosis = diagnosis
       this.latestSnapshot = snapshot
-      this.transition('critical')
-      this.healthStatus = 'Critical'
+      const faultState = this.activeFault === 'constrained_video_bitrate' ? 'degraded' : 'critical'
+      this.transition(faultState)
+      this.healthStatus = faultState === 'degraded' ? 'Degraded' : 'Critical'
       appendTimeline(
         this,
         actor === 'Agent' ? 'Agent' : 'System',
-        'Disabled audio diagnosed',
-        'Authoritative track state identified a live, attached, but disabled outbound audio track.',
+        this.activeFault === 'constrained_video_bitrate' ? 'Video bitrate cap diagnosed' : 'Disabled audio diagnosed',
+        this.activeFault === 'constrained_video_bitrate'
+          ? 'Fresh sender-parameter readback confirmed the active outbound video bitrate cap.'
+          : 'Authoritative track state identified a live, attached, but disabled outbound audio track.',
         {
           diagnosis_id: diagnosis.id,
           severity: diagnosis.findings[0].severity,
@@ -234,12 +298,14 @@ export const useLabStore = defineStore('lab', {
     stageRecoveryPlan(plan, actor = 'System') {
       this.recoveryPlan = plan
       this.transition('awaiting_approval')
-      this.healthStatus = 'Critical'
+      this.healthStatus = this.activeFault === 'constrained_video_bitrate' ? 'Degraded' : 'Critical'
       appendTimeline(
         this,
         actor === 'Agent' ? 'Agent' : 'System',
         'Recovery plan staged',
-        'Enable the actual outbound audio track after explicit human approval.',
+        plan.action === 'restore_video_bitrate'
+          ? 'Restore the preserved known-good video encoding profile after explicit human approval.'
+          : 'Enable the actual outbound audio track after explicit human approval.',
         { plan_id: plan.id, action: plan.action, expires_at: plan.expires_at },
         { type: 'recovery_plan_staged' },
       )
@@ -262,7 +328,7 @@ export const useLabStore = defineStore('lab', {
       assertRecoveryTransition(this.recoveryPlan.status, 'rejected')
       this.recoveryPlan.status = 'rejected'
       this.recoveryPlan.rejected_at = new Date().toISOString()
-      this.transition('critical')
+      this.transition(this.activeFault === 'constrained_video_bitrate' ? 'degraded' : 'critical')
       appendUserTimeline(
         this,
         'Recovery rejected',
@@ -278,8 +344,8 @@ export const useLabStore = defineStore('lab', {
       ) return false
       assertRecoveryTransition(this.recoveryPlan.status, 'expired')
       this.recoveryPlan.status = 'expired'
-      if (this.state === 'awaiting_approval') this.transition('critical')
-      this.healthStatus = 'Critical'
+      if (this.state === 'awaiting_approval') this.transition(this.activeFault === 'constrained_video_bitrate' ? 'degraded' : 'critical')
+      this.healthStatus = this.activeFault === 'constrained_video_bitrate' ? 'Degraded' : 'Critical'
       appendSystemTimeline(
         this,
         'Recovery plan expired',
@@ -300,8 +366,9 @@ export const useLabStore = defineStore('lab', {
         this.recoveryPlan.status = 'applied'
         this.recoveryPlan.applied_at = new Date().toISOString()
       }
-      if (['recovering', 'verifying'].includes(this.state)) this.transition('critical')
-      this.healthStatus = 'Critical'
+      const faultState = this.activeFault === 'constrained_video_bitrate' ? 'degraded' : 'critical'
+      if (['recovering', 'verifying'].includes(this.state)) this.transition(faultState)
+      this.healthStatus = faultState === 'degraded' ? 'Degraded' : 'Critical'
       this.recordOperationError(result, 'Recovery failed', {
         mutation_observed: mutationObserved,
         mutation_uncertain: mutationUncertain,
@@ -318,7 +385,9 @@ export const useLabStore = defineStore('lab', {
       appendSystemTimeline(
         this,
         'Approved recovery applied',
-        'The allowlisted executor changed the actual outbound audio track.',
+        this.recoveryPlan.action === 'restore_video_bitrate'
+          ? 'The allowlisted executor restored the preserved video sender encoding profile.'
+          : 'The allowlisted executor changed the actual outbound audio track.',
         { previous_state: previousState, new_state: newState },
       )
     },
@@ -389,7 +458,7 @@ export const useLabStore = defineStore('lab', {
       appendUserTimeline(
         this,
         'Scenario reset requested',
-        'CallScope is restoring the actual audio track and recapturing healthy evidence.',
+        'CallScope is restoring the actual audio track and preserved video sender profile, then recapturing healthy evidence.',
       )
     },
     completeScenarioReset(snapshot) {
@@ -402,24 +471,38 @@ export const useLabStore = defineStore('lab', {
         this,
         nextState === 'healthy' ? 'Scenario reset to healthy' : 'Scenario reset verification incomplete',
         nextState === 'healthy'
-          ? 'The actual audio track is enabled and fresh media progression was confirmed.'
-          : 'The actual audio track is enabled, but fresh evidence did not meet healthy requirements.',
-        { snapshot_hash: snapshot.snapshot_hash, audio_enabled: snapshot.tracks.audio.enabled },
+          ? 'Actual peers, tracks, receivers, and video sender configuration were restored and confirmed.'
+          : 'Actual media state was restored, but fresh evidence did not meet healthy requirements.',
+        {
+          snapshot_hash: snapshot.snapshot_hash,
+          audio_enabled: snapshot.tracks.audio.enabled,
+          video_bitrate_limited: snapshot.senders?.video?.bitrate_limited ?? null,
+          media_progression: snapshot.media_progression,
+          progression_is_supporting_evidence: snapshot.reset_verification?.progression_is_supporting_evidence ?? false,
+        },
       )
     },
-    failScenarioReset(result, actualAudio, { mutationUncertain = false } = {}) {
+    failScenarioReset(result, actualState, { faultKind = 'disabled_audio', mutationUncertain = false } = {}) {
       if (this.state !== 'verifying') this.transition('verifying')
-      this.faultRevision += 1
-      this.activeFault = actualAudio?.enabled === false ? 'disabled_audio' : null
+      const videoFault = faultKind === 'constrained_video_bitrate'
+      const faultStillPresent = videoFault
+        ? mutationUncertain || actualState?.bitrate_limited !== false ||
+          actualState?.readback_confirmed !== true || actualState?.profile_restored !== true
+        : mutationUncertain || actualState?.enabled !== true ||
+          actualState?.ready_state !== 'live' || actualState?.attached !== true
+      this.activeFault = faultStillPresent ? faultKind : null
       this.failureBaseline = null
       this.diagnosis = null
       this.recoveryPlan = null
       this.verification = null
       this.incidentReport = null
-      this.transition('critical')
-      this.healthStatus = 'Critical'
+      const failureState = videoFault && faultStillPresent ? 'degraded' : 'critical'
+      this.transition(failureState)
+      this.healthStatus = failureState === 'degraded' ? 'Degraded' : 'Critical'
+      this.healthScore = failureState === 'degraded' ? 70 : 55
       this.recordOperationError(result, 'Scenario reset failed', {
-        current_state: actualAudio,
+        current_state: actualState,
+        fault_kind: faultKind,
         mutation_uncertain: mutationUncertain,
       })
     },
@@ -461,6 +544,8 @@ export const useLabStore = defineStore('lab', {
         },
       }
       this.metrics = emptyMetrics()
+      this.videoSender = emptyVideoSender()
+      this.selectedCandidate = null
       this.audioLevel = 0
       this.evidenceChecks = emptyEvidenceChecks()
       this.lastCleanupReceipt = receipt
@@ -503,6 +588,8 @@ export const useLabStore = defineStore('lab', {
       this.connection = emptyConnection()
       this.tracks = emptyTracks()
       this.metrics = emptyMetrics()
+      this.videoSender = emptyVideoSender()
+      this.selectedCandidate = null
       this.audioLevel = 0
       this.evidenceChecks = emptyEvidenceChecks()
       this.healthyBaseline = null

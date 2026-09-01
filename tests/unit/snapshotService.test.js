@@ -104,4 +104,42 @@ describe('authoritative sanitized snapshots', () => {
       expect.objectContaining({ code: 'AUDIO_RECEIVER_UNAVAILABLE' }),
     )
   })
+
+  it('binds confirmed sender readback and safe candidate categories into the authoritative snapshot', () => {
+    const status = peerStatus(true)
+    status.senders = {
+      video: {
+        attached: true,
+        max_bitrate_bps: 80_000,
+        bitrate_limited: true,
+        readback_confirmed: true,
+        encoding_count: 1,
+      },
+    }
+    const previousSample = sample(1000)
+    const currentSample = sample(2000, 2)
+    currentSample.selectedCandidate = {
+      type: 'host', protocol: 'udp', path: 'direct', relayed: false,
+    }
+
+    const snapshot = createAuthoritativeSnapshot({
+      sessionId: 'session-safe',
+      sessionEpoch: 2,
+      faultRevision: 1,
+      activeFault: 'constrained_video_bitrate',
+      peerStatus: status,
+      previousSample,
+      currentSample,
+    })
+
+    expect(snapshot.senders.video).toMatchObject({
+      max_bitrate_bps: 80_000,
+      bitrate_limited: true,
+      readback_confirmed: true,
+    })
+    expect(snapshot.selected_candidate).toEqual({
+      type: 'host', protocol: 'udp', path: 'direct', relayed: false,
+    })
+    expect(snapshot.health.status).toBe('degraded')
+  })
 })

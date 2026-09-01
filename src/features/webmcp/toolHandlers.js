@@ -264,7 +264,7 @@ export function createWebMcpToolHandlers(agent) {
         after: verification.after,
         health_score_delta: verification.health_score_delta,
         restored_states: verification.primary_checks,
-        relevant_metric_deltas: {
+        relevant_metric_deltas: verification.supporting_evidence ?? {
           audio_energy_before: verification.before?.audio_energy_delta ?? null,
           audio_energy_after: verification.after?.audio_energy_delta ?? null,
         },

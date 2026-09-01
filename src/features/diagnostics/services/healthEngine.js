@@ -18,7 +18,7 @@ function readyStateOf(track) {
   return track?.ready_state ?? track?.readyState
 }
 
-export function evaluateCallHealth({ connection, tracks, receivers, progression }) {
+export function evaluateCallHealth({ connection, tracks, receivers, senders, progression }) {
   const requiredTracks = ['audio', 'video']
   const peersConnected =
     connection?.outbound === 'connected' && connection?.inbound === 'connected'
@@ -29,12 +29,16 @@ export function evaluateCallHealth({ connection, tracks, receivers, progression 
   const receiversReady = requiredTracks.every(
     (kind) => readyStateOf(receivers?.[kind]) === 'live',
   )
-  const mediaProgressing = [
+  const progressionValues = [
     progression?.outbound_audio,
     progression?.inbound_audio,
     progression?.outbound_video,
     progression?.inbound_video,
-  ].every((value) => value === true)
+  ]
+  const mediaProgressing = progressionValues.every((value) => value === true)
+  const mediaProgressionConfirmed = progressionValues.every(
+    (value) => typeof value === 'boolean',
+  )
   const checks = {
     peers_connected: peersConnected,
     tracks_live_enabled_attached: tracksReady,
@@ -80,7 +84,17 @@ export function evaluateCallHealth({ connection, tracks, receivers, progression 
     }
   }
 
-  if (!mediaProgressing && !deductions.some((item) => item.severity === 'critical')) {
+  const videoSender = senders?.video
+  if (videoSender?.readback_confirmed === true && videoSender.bitrate_limited === true) {
+    deductions.push({
+      code: 'VIDEO_BITRATE_CONSTRAINED',
+      severity: 'warning',
+      points: 30,
+      explanation: `Fresh sender-parameter readback confirms a ${videoSender.max_bitrate_bps} bps video cap.`,
+    })
+  }
+
+  if (mediaProgressionConfirmed && !mediaProgressing && !deductions.some((item) => item.severity === 'critical')) {
     deductions.push({
       code: 'MEDIA_PROGRESSION_INCOMPLETE',
       severity: 'warning',
@@ -110,6 +124,7 @@ export function evaluateHealthyEvidence({
   peers,
   tracks,
   receivers,
+  senders,
   previous,
   current,
 }) {
@@ -137,6 +152,7 @@ export function evaluateHealthyEvidence({
     connection: peers,
     tracks,
     receivers,
+    senders,
     progression: {
       outbound_audio: countersProgressing,
       inbound_audio: countersProgressing,
@@ -152,6 +168,8 @@ export function deriveMetrics(previous, current) {
       outboundBitrateKbps: null,
       packetLoss: null,
       latencyMs: null,
+      roundTripTimeMs: null,
+      jitterMs: null,
       frameRate: null,
     }
   }
@@ -190,6 +208,12 @@ export function deriveMetrics(previous, current) {
       : Number.isFinite(current.inbound.jitterMs)
         ? current.inbound.jitterMs
         : null,
+    roundTripTimeMs: Number.isFinite(current.remote.roundTripTimeMs)
+      ? current.remote.roundTripTimeMs
+      : null,
+    jitterMs: Number.isFinite(current.inbound.jitterMs)
+      ? current.inbound.jitterMs
+      : null,
     frameRate,
   }
 }

@@ -53,3 +53,53 @@ export function verifyDisabledAudioRecovery({ failureSnapshot, recoveredSnapshot
     ],
   }
 }
+
+export function verifyVideoBitrateRecovery({ failureSnapshot, recoveredSnapshot }) {
+  const beforeVideo = failureSnapshot.senders.video
+  const afterVideo = recoveredSnapshot.senders.video
+  const primaryChecks = {
+    sender_cap_removed: beforeVideo.bitrate_limited === true && afterVideo.bitrate_limited === false,
+    known_good_profile_readback_confirmed:
+      afterVideo.readback_confirmed === true && afterVideo.profile_restored === true,
+    video_sender_attached: afterVideo.attached === true,
+    both_peers_connected:
+      recoveredSnapshot.connection.outbound === 'connected' &&
+      recoveredSnapshot.connection.inbound === 'connected',
+  }
+  const passed = Object.values(primaryChecks).filter(Boolean).length
+  const verdict = passed === Object.keys(primaryChecks).length
+    ? 'recovered'
+    : primaryChecks.sender_cap_removed && primaryChecks.video_sender_attached
+      ? 'partially_recovered'
+      : 'not_recovered'
+  const supportingEvidence = {
+    outbound_bitrate_before_kbps: failureSnapshot.metrics.outbound_bitrate_kbps,
+    outbound_bitrate_after_kbps: recoveredSnapshot.metrics.outbound_bitrate_kbps,
+    frame_rate_before: failureSnapshot.metrics.frame_rate,
+    frame_rate_after: recoveredSnapshot.metrics.frame_rate,
+  }
+
+  return {
+    verdict,
+    primary_checks: primaryChecks,
+    before: {
+      health_status: failureSnapshot.health.status,
+      health_score: failureSnapshot.health.score,
+      video_sender: beforeVideo,
+      connection: failureSnapshot.connection,
+    },
+    after: {
+      health_status: recoveredSnapshot.health.status,
+      health_score: recoveredSnapshot.health.score,
+      video_sender: afterVideo,
+      connection: recoveredSnapshot.connection,
+    },
+    health_score_delta: recoveredSnapshot.health.score - failureSnapshot.health.score,
+    supporting_evidence: supportingEvidence,
+    limitations: [
+      'Sender-parameter readback is primary verification evidence.',
+      'Measured bitrate and frame rate are supporting only and may remain unavailable or noisy in local loopback.',
+      'Visible quality change is browser-dependent and is not required for recovery.',
+    ],
+  }
+}

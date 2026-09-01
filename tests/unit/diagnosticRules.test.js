@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   AUDIO_RECOVERY_ACTION,
+  VIDEO_BITRATE_RECOVERY_ACTION,
   diagnoseDisabledAudio,
+  diagnoseVideoBitrate,
 } from '../../src/features/diagnostics/services/diagnosticRules.js'
 
 function snapshot(enabled) {
@@ -41,5 +43,42 @@ describe('disabled-audio diagnostic rule', () => {
 
   it('does not allow a repair when disabled state is not authoritative', () => {
     expect(diagnoseDisabledAudio(snapshot(true)).allowed_actions).toEqual([])
+  })
+})
+
+describe('video-bitrate diagnostic rule', () => {
+  it('uses fresh sender readback as primary evidence and allows only profile restoration', () => {
+    const diagnosis = diagnoseVideoBitrate({
+      ...snapshot(true),
+      senders: {
+        video: {
+          attached: true,
+          max_bitrate_bps: 80_000,
+          bitrate_limited: true,
+          readback_confirmed: true,
+        },
+      },
+      metrics: { outbound_bitrate_kbps: null, frame_rate: null },
+    }, () => 'diagnosis-video')
+
+    expect(diagnosis).toMatchObject({
+      id: 'diagnosis-video',
+      symptom: 'poor_video',
+      allowed_actions: [VIDEO_BITRATE_RECOVERY_ACTION],
+    })
+    expect(diagnosis.findings[0]).toMatchObject({
+      code: 'VIDEO_SENDER_BITRATE_CONSTRAINED',
+      severity: 'warning',
+      confidence: 'high',
+      allowed_actions: [VIDEO_BITRATE_RECOVERY_ACTION],
+    })
+    expect(diagnosis.findings[0].evidence[0]).toEqual({
+      field: 'senders.video.max_bitrate_bps',
+      value: 80_000,
+      role: 'primary',
+    })
+    expect(diagnosis.findings[0].limitations).toContain(
+      'Measured bitrate and frame rate are supporting evidence only and may be unavailable or unchanged in a local loopback.',
+    )
   })
 })

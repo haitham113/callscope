@@ -48,6 +48,16 @@ export function createAuthoritativeSnapshot({
       { ready_state: peerStatus.receivers[kind].readyState },
     ]),
   )
+  const senders = {
+    video: {
+      attached: peerStatus.senders?.video?.attached ?? tracks.video.attached,
+      max_bitrate_bps: peerStatus.senders?.video?.max_bitrate_bps ?? null,
+      bitrate_limited: peerStatus.senders?.video?.bitrate_limited ?? false,
+      readback_confirmed: peerStatus.senders?.video?.readback_confirmed ?? false,
+      profile_restored: peerStatus.senders?.video?.profile_restored ?? false,
+      encoding_count: peerStatus.senders?.video?.encoding_count ?? null,
+    },
+  }
   const snapshot = {
     session_id: sessionId,
     session_epoch: sessionEpoch,
@@ -57,11 +67,15 @@ export function createAuthoritativeSnapshot({
     connection: { ...peerStatus.connection },
     tracks,
     receivers,
+    senders,
+    selected_candidate: currentSample.selectedCandidate ?? null,
     media_progression: progression,
     metrics: {
       outbound_bitrate_kbps: metrics.outboundBitrateKbps,
       packet_loss: metrics.packetLoss,
       latency_ms: metrics.latencyMs,
+      round_trip_time_ms: metrics.roundTripTimeMs,
+      jitter_ms: metrics.jitterMs,
       frame_rate: metrics.frameRate,
       audio_energy_delta: delta(
         previousSample?.inbound?.totalAudioEnergy,
@@ -73,6 +87,7 @@ export function createAuthoritativeSnapshot({
     connection: snapshot.connection,
     tracks,
     receivers,
+    senders,
     progression,
   }).health
   return sanitizeValue(snapshot)
@@ -87,6 +102,7 @@ export function snapshotBinding(snapshot) {
     connection: snapshot.connection,
     tracks: snapshot.tracks,
     receivers: snapshot.receivers,
+    senders: snapshot.senders,
   }
 }
 
