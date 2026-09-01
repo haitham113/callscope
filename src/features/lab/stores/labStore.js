@@ -46,6 +46,26 @@ function emptyEvidenceChecks() {
   }
 }
 
+const HEALTH_SEVERITY = Object.freeze({ healthy: 0, degraded: 1, critical: 2 })
+
+function stateAfterVerification(verification, snapshot) {
+  const verdictState = verification.verdict === 'recovered'
+    ? 'healthy'
+    : verification.verdict === 'partially_recovered'
+      ? 'degraded'
+      : 'critical'
+  const snapshotState = Object.hasOwn(HEALTH_SEVERITY, snapshot.health.status)
+    ? snapshot.health.status
+    : verdictState
+  return HEALTH_SEVERITY[snapshotState] > HEALTH_SEVERITY[verdictState]
+    ? snapshotState
+    : verdictState
+}
+
+function healthStatusLabel(state) {
+  return state === 'healthy' ? 'Healthy' : state === 'degraded' ? 'Degraded' : 'Critical'
+}
+
 function appendTimeline(
   store,
   actor,
@@ -397,14 +417,9 @@ export const useLabStore = defineStore('lab', {
       assertRecoveryTransition(this.recoveryPlan.status, 'verified')
       this.recoveryPlan.status = 'verified'
       this.recoveryPlan.verified_at = new Date().toISOString()
-      const nextState =
-        verification.verdict === 'recovered'
-          ? 'healthy'
-          : verification.verdict === 'partially_recovered'
-            ? 'degraded'
-            : 'critical'
+      const nextState = stateAfterVerification(verification, snapshot)
       this.transition(nextState)
-      this.healthStatus = nextState === 'healthy' ? 'Healthy' : nextState === 'degraded' ? 'Degraded' : 'Critical'
+      this.healthStatus = healthStatusLabel(nextState)
       this.healthScore = snapshot.health.score
       if (verification.verdict === 'recovered') this.activeFault = null
       appendSystemTimeline(
@@ -417,21 +432,13 @@ export const useLabStore = defineStore('lab', {
     refreshVerification(verification, snapshot) {
       this.verification = verification
       this.latestSnapshot = snapshot
-      const nextState = verification.verdict === 'recovered'
-        ? 'healthy'
-        : verification.verdict === 'partially_recovered'
-          ? 'degraded'
-          : 'critical'
+      const nextState = stateAfterVerification(verification, snapshot)
       if (this.state !== nextState) {
         if (this.state !== 'verifying') this.transition('verifying')
         this.transition(nextState)
       }
       this.healthScore = snapshot.health.score
-      this.healthStatus = nextState === 'healthy'
-        ? 'Healthy'
-        : nextState === 'degraded'
-          ? 'Degraded'
-          : 'Critical'
+      this.healthStatus = healthStatusLabel(nextState)
       this.incidentReport = null
     },
     setIncidentReport(report) {
@@ -463,9 +470,11 @@ export const useLabStore = defineStore('lab', {
     },
     completeScenarioReset(snapshot) {
       this.latestSnapshot = snapshot
-      const nextState = snapshot.health.status === 'healthy' ? 'healthy' : 'critical'
+      const nextState = Object.hasOwn(HEALTH_SEVERITY, snapshot.health.status)
+        ? snapshot.health.status
+        : 'critical'
       this.transition(nextState)
-      this.healthStatus = nextState === 'healthy' ? 'Healthy' : 'Critical'
+      this.healthStatus = healthStatusLabel(nextState)
       this.healthScore = snapshot.health.score
       appendSystemTimeline(
         this,

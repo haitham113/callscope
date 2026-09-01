@@ -49,6 +49,7 @@ test('completes the real manual video-bitrate rescue from sender readback', asyn
 
   await expect(page.getByTestId('health-status')).toContainText('Healthy', { timeout: 20_000 })
   await expect(page.getByTestId('before-after')).toContainText('sender cap removed')
+  await expect(page.getByTestId('before-after')).toContainText('Known-good profile restored: true')
   await expect(page.getByTestId('video-sender-status')).toContainText('Known-good profile confirmed')
   await expect(page.getByTestId('before-after')).toContainText('supporting evidence only')
 })

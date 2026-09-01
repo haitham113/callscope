@@ -408,7 +408,8 @@ onBeforeUnmount(() => {
               <strong>{{ verification.after.health_status }} · {{ verification.after.health_score }}/100</strong>
               <template v-if="verification.after.video_sender">
                 <p>Video cap: {{ evidenceLabel(verification.after.video_sender.max_bitrate_bps) }}</p>
-                <p>Known-good readback: {{ verification.after.video_sender.readback_confirmed }}</p>
+                <p>Sender readback succeeded: {{ verification.after.video_sender.readback_confirmed }}</p>
+                <p>Known-good profile restored: {{ verification.after.video_sender.profile_restored }}</p>
               </template>
               <template v-else>
                 <p>Audio enabled: {{ verification.after.audio_track.enabled }}</p>

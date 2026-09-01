@@ -179,4 +179,21 @@ describe('lab store session reset', () => {
       healthScore: 40,
     })
   })
+
+  it('does not promote overall health beyond the fresh authoritative snapshot', () => {
+    const store = useLabStore()
+    store.beginSession()
+    store.markHealthy({ captured_at: 'synthetic' })
+
+    store.refreshVerification(
+      { verdict: 'recovered' },
+      { health: { status: 'degraded', score: 80 } },
+    )
+
+    expect(store).toMatchObject({
+      state: 'degraded',
+      healthStatus: 'Degraded',
+      healthScore: 80,
+    })
+  })
 })

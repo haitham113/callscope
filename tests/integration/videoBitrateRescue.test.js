@@ -210,22 +210,42 @@ describe('complete constrained-video-bitrate rescue workflow', () => {
     })
   })
 
-  it('accepts authoritative reset restoration when loopback progression counters are noisy', async () => {
+  it('preserves degraded reset evidence when required media progression remains incomplete', async () => {
     const { store, runtime } = await harness({ resetProgressionIncomplete: true })
     await expect(runtime.breakVideoBitrate()).resolves.toMatchObject({ ok: true })
 
     const result = await runtime.resetScenario()
 
     expect(result).toMatchObject({
-      ok: true,
-      snapshot: {
-        health: { status: 'healthy' },
-        reset_verification: {
-          primary_state_restored: true,
-          progression_is_supporting_evidence: true,
-        },
+      ok: false,
+      error: { code: 'VERIFICATION_INCOMPLETE' },
+    })
+    expect(store.latestSnapshot).toMatchObject({
+      health: {
+        status: 'degraded',
+        deductions: [{ code: 'MEDIA_PROGRESSION_INCOMPLETE' }],
       },
     })
-    expect(store).toMatchObject({ state: 'healthy', healthStatus: 'Healthy', activeFault: null })
+    expect(store).toMatchObject({ state: 'degraded', healthStatus: 'Degraded', activeFault: null })
+  })
+
+  it('keeps overall health degraded when the sender profile recovers but media evidence does not', async () => {
+    const { store, runtime } = await harness({ resetProgressionIncomplete: true })
+    await runtime.breakVideoBitrate()
+    await runtime.diagnoseAndStageRecovery()
+    runtime.approvePlan()
+
+    const result = await runtime.applyApprovedRecovery()
+
+    expect(result).toMatchObject({
+      ok: true,
+      verification: { verdict: 'recovered' },
+    })
+    expect(store).toMatchObject({
+      state: 'degraded',
+      healthStatus: 'Degraded',
+      healthScore: 80,
+      activeFault: null,
+    })
   })
 })

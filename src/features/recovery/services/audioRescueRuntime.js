@@ -27,43 +27,6 @@ function canAwaitFreshAudioProgression(snapshot) {
     (snapshot.media_progression.outbound_audio !== true || snapshot.media_progression.inbound_audio !== true)
 }
 
-function normalizeScenarioResetSnapshot(snapshot) {
-  const onlyNoisyProgression = snapshot.health.status === 'degraded' &&
-    snapshot.health.deductions?.length > 0 &&
-    snapshot.health.deductions.every((item) => item.code === 'MEDIA_PROGRESSION_INCOMPLETE')
-  if (!onlyNoisyProgression) return snapshot
-
-  const peersConnected = snapshot.connection.outbound === 'connected' &&
-    snapshot.connection.inbound === 'connected'
-  const tracksRestored = ['audio', 'video'].every((kind) => {
-    const track = snapshot.tracks[kind]
-    return track.ready_state === 'live' && track.enabled === true && track.attached === true
-  })
-  const receiversLive = ['audio', 'video'].every(
-    (kind) => snapshot.receivers[kind].ready_state === 'live',
-  )
-  const videoSender = snapshot.senders?.video
-  const senderRestored = videoSender?.attached === true &&
-    videoSender.bitrate_limited === false &&
-    videoSender.readback_confirmed === true &&
-    videoSender.profile_restored === true
-
-  if (!onlyNoisyProgression || !peersConnected || !tracksRestored || !receiversLive || !senderRestored) {
-    return snapshot
-  }
-
-  return sanitizeValue({
-    ...snapshot,
-    health: { status: 'healthy', score: 100, deductions: [] },
-    reset_verification: {
-      primary_state_restored: true,
-      progression_is_supporting_evidence: true,
-      observed_media_progression: snapshot.media_progression,
-      limitation: 'A transient loopback counter window did not override confirmed peer, track, receiver, and sender restoration.',
-    },
-  })
-}
-
 function cancellationResult(error) {
   return error?.code === 'OPERATION_CANCELLED' || error?.name === 'AbortError'
     ? errorResult('OPERATION_CANCELLED')
@@ -576,7 +539,13 @@ export function createAudioRescueRuntime({
           phase: 'recovery_verification',
           sampleDurationMs: DEFAULT_SAMPLE_DURATION_MS,
         })
-        if (restoringVideo || !canAwaitFreshAudioProgression(recoveredSnapshot)) break
+        const retryableVideoProgression = restoringVideo &&
+          recoveredSnapshot.health.status === 'degraded' &&
+          recoveredSnapshot.health.deductions?.length > 0 &&
+          recoveredSnapshot.health.deductions.every(
+            (item) => item.code === 'MEDIA_PROGRESSION_INCOMPLETE',
+          )
+        if (restoringVideo ? !retryableVideoProgression : !canAwaitFreshAudioProgression(recoveredSnapshot)) break
       }
       const verification = restoringVideo
         ? verifyVideoBitrateRecovery({ failureSnapshot: store.failureBaseline, recoveredSnapshot })
@@ -695,7 +664,6 @@ export function createAudioRescueRuntime({
         if (!retryableVideoProgression &&
             (resetFault !== 'disabled_audio' || !canAwaitFreshAudioProgression(snapshot))) break
       }
-      snapshot = normalizeScenarioResetSnapshot(snapshot)
       store.completeScenarioReset(snapshot)
       if (snapshot.health.status !== 'healthy') {
         return reject(errorResult('VERIFICATION_INCOMPLETE'), 'Scenario reset failed')

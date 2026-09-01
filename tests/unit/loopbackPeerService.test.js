@@ -10,7 +10,12 @@ class FakeStream {
   getTracks() { return [...this.tracks] }
 }
 
-function installFakeRtc({ pendingCandidates = false, failOneListenerRemoval = false, queueCandidateDuringStartup = false } = {}) {
+function installFakeRtc({
+  pendingCandidates = false,
+  failOneListenerRemoval = false,
+  queueCandidateDuringStartup = false,
+  addVideoDefaultsAfterWrite = false,
+} = {}) {
   const instances = []
   instances.candidateAdds = 0
   let removalFailureAvailable = failOneListenerRemoval
@@ -55,7 +60,16 @@ function installFakeRtc({ pendingCandidates = false, failOneListenerRemoval = fa
       const sender = {
         track,
         getParameters() { return structuredClone(parameters) },
-        async setParameters(next) { parameters = structuredClone(next) },
+        async setParameters(next) {
+          parameters = structuredClone(next)
+          if (track.kind === 'video' && addVideoDefaultsAfterWrite) {
+            parameters.encodings = parameters.encodings.map((encoding) => ({
+              priority: 'low',
+              networkPriority: 'low',
+              ...encoding,
+            }))
+          }
+        },
       }
       this.senders.push(sender)
       return sender
@@ -101,7 +115,7 @@ afterEach(() => {
 
 describe('loopback peer cleanup', () => {
   it('preserves the known-good video encoding profile and confirms cap and restore from fresh readback', async () => {
-    installFakeRtc()
+    const peers = installFakeRtc()
     const service = await createLoopbackPeerService(sourceStream())
 
     const capped = await service.applyVideoBitrateCap()
@@ -125,6 +139,27 @@ describe('loopback peer cleanup', () => {
     expect(service.getVideoSenderEncodingProfile()).toEqual([
       { active: true, scaleResolutionDownBy: 1 },
     ])
+
+    const sender = peers[0].getSenders().find((item) => item.track.kind === 'video')
+    const drifted = sender.getParameters()
+    drifted.encodings[0].maxFramerate = 12
+    await sender.setParameters(drifted)
+    expect(service.getVideoSenderState()).toMatchObject({
+      readback_confirmed: true,
+      profile_restored: false,
+    })
+  })
+
+  it('normalizes browser-reported encoding defaults without hiding material profile drift', async () => {
+    installFakeRtc({ addVideoDefaultsAfterWrite: true })
+    const service = await createLoopbackPeerService(sourceStream())
+
+    await expect(service.applyVideoBitrateCap()).resolves.toMatchObject({
+      new_state: { readback_confirmed: true, bitrate_limited: true },
+    })
+    await expect(service.restoreVideoBitrateProfile()).resolves.toMatchObject({
+      new_state: { readback_confirmed: true, profile_restored: true },
+    })
   })
 
   it('bounds pending ICE cleanup and reports the operation as still pending', async () => {

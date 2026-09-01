@@ -506,7 +506,8 @@ describe('Milestone 3 safety integration', () => {
       error: { code: 'VERIFICATION_INCOMPLETE' },
     })
     expect(subject.audio.enabled).toBe(true)
-    expect(subject.store.state).toBe('critical')
+    expect(subject.store.state).toBe('degraded')
+    expect(subject.store.healthStatus).toBe('Degraded')
     expect(subject.store.timeline.some((event) => event.title === 'Scenario reset to healthy')).toBe(false)
   })
 

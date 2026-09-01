@@ -26,16 +26,27 @@ const ENCODING_PROFILE_FIELDS = Object.freeze([
   'scalabilityMode',
 ])
 
+const ENCODING_PROFILE_DEFAULTS = Object.freeze({
+  active: true,
+  networkPriority: 'low',
+  priority: 'low',
+  scaleResolutionDownBy: 1,
+})
+
+function encodingProfileValue(encoding, field) {
+  return Object.hasOwn(encoding, field)
+    ? encoding[field]
+    : ENCODING_PROFILE_DEFAULTS[field]
+}
+
 function encodingProfileMatches(actual, expected) {
   if (actual.length !== expected.length) return false
   return expected.every((expectedEncoding, index) => {
     const actualEncoding = actual[index] ?? {}
-    return ENCODING_PROFILE_FIELDS.every((field) => {
-      if (Object.hasOwn(expectedEncoding, field)) {
-        return actualEncoding[field] === expectedEncoding[field]
-      }
-      return field !== 'maxBitrate' || !Number.isFinite(actualEncoding.maxBitrate)
-    })
+    return ENCODING_PROFILE_FIELDS.every(
+      (field) => encodingProfileValue(actualEncoding, field) ===
+        encodingProfileValue(expectedEncoding, field),
+    )
   })
 }
 
