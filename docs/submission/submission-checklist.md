@@ -16,11 +16,12 @@ Checked items are backed by repository or validation evidence. External publicat
 
 - [x] Intended HTTPS URL is documented: <https://haitham113.github.io/callscope/>.
 - [x] GitHub Pages workflow builds and deploys static `dist/` from `main`.
-- [ ] Deploy the Milestone 6 commit after explicit authorization.
-- [ ] Confirm the deployed bundle contains the bitrate fault and Milestone 6 polish.
-- [ ] Run the full deployed Chrome suite without a 404, console error, or unhandled rejection.
+- [x] Deploy the Milestone 6 commit after explicit authorization.
+- [x] Confirm the deployed bundle contains the bitrate fault and Milestone 6 polish.
+- [x] Run the full deployed Chrome suite without a 404, console error, or unhandled rejection.
+- [ ] Deploy the final active-workflow-caption contrast correction and rerun the deployed polish gate.
 - [ ] Complete the two-prompt golden path in ChatGPT's in-app browser.
-- [ ] Complete the audio and bitrate paths through the installed WebMCP plugin on the deployed origin.
+- [x] Complete the audio and bitrate paths through the installed WebMCP plugin on the deployed origin.
 
 ## Submission assets
 
@@ -36,14 +37,15 @@ Checked items are backed by repository or validation evidence. External publicat
 
 ## Final judge readiness
 
-- [ ] Open the live URL from a clean signed-out supported client.
-- [ ] Reach Healthy with one click and no permission request.
-- [ ] Complete three consecutive deployed audio-rescue rehearsals and record each duration.
-- [ ] Verify approval alone leaves the actual track disabled.
-- [ ] Verify the explicit second prompt resumes apply → compare → report.
-- [ ] Verify manual recovery remains usable without WebMCP.
-- [ ] Verify laptop, tablet, and stacked mobile layouts without horizontal overflow.
-- [ ] Verify keyboard navigation, visible focus, contrast, and reduced motion.
-- [ ] Verify loading, unsupported, empty, error, end, and reset states.
-- [ ] Confirm no console errors or unhandled rejections through the entire path.
+- [x] Open the live URL from a clean signed-out supported client.
+- [x] Reach Healthy with one click and no permission request.
+- [x] Complete three consecutive deployed audio-rescue rehearsals and record each duration.
+- [x] Verify approval alone leaves the actual track disabled.
+- [ ] Verify the explicit second prompt resumes apply → compare → report in ChatGPT's in-app browser.
+- [x] Verify manual recovery remains usable without WebMCP.
+- [x] Verify laptop, tablet, and stacked mobile layouts without horizontal overflow.
+- [x] Verify keyboard navigation, visible focus, and reduced motion.
+- [ ] Verify the corrected visible-text contrast audit on the deployed bundle.
+- [x] Verify loading, unsupported, empty, error, end, and reset states.
+- [x] Confirm no console errors or unhandled rejections through the entire path.
 - [ ] Submit only after every external item above is checked and live evidence is recorded.

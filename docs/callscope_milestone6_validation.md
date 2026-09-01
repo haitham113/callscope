@@ -8,14 +8,14 @@ Scope: production reliability, judge-facing polish, synchronized documentation, 
 | Environment | Result | Evidence |
 | --- | --- | --- |
 | Local production preview in Chrome | **PASS** | Full manual and WebMCP audio/video flows, negative paths, responsive/accessibility checks, screenshots, repeated rehearsals, and console/unhandled-error assertions passed. |
-| Installed WebMCP Inspector 1.9.13 against production preview | **PASS** | Native extension-message bitrate rescue passed in a disposable Chrome profile in 51.3s. |
+| Installed WebMCP Inspector 1.9.13 against public deployment | **PASS** | Exact discovery of all seven tools plus native extension-message audio and bitrate rescues passed in a disposable Chrome profile in 17.30s. |
 | Isolated candidate clone with fresh dependencies | **PASS** | `npm ci`, 124 tests, lint, and production build passed; npm reported 0 vulnerabilities. |
-| Public repository | **PASS; M6 PUSH PENDING** | Signed-out HTTPS request returned 200; candidate scan found no secret-like paths/patterns, tracked generated directories, or files over 5 MB. Milestone 6 is present in this revision but is not yet published to the remote repository. |
-| Current public deployment | **MILESTONE 5 PASS; MILESTONE 6 NOT DEPLOYED** | Core, audio, bitrate, native WebMCP, and tablet checks passed. Four new M6-only assertions fail because the public bundle lacks the workflow strip, deliberate approval copy, visible mobile readiness badge, and updated reduced-motion rule. |
+| Public repository | **PASS** | `origin/main` resolves to Milestone 6 commit `5ea9b2b`; signed-out HTTPS returned 200 and the candidate safety scan found no secret-like paths/patterns, tracked generated directories, or files over 5 MB. |
+| Current public deployment | **FINAL CONTRAST PATCH PENDING** | The complete deployed Chrome suite passed 31/31 in 1.2 minutes and the strengthened mobile flow passed. A broader visible-text audit then found the active “Start and watch” caption at 3.92:1; the one-rule local correction passes across idle, healthy, staged, approved, and recovered states but is not deployed yet. |
 | ChatGPT in-app browser | **NOT VERIFIED** | This supported client is unavailable from the current environment. |
 | Public YouTube recording and challenge submission | **NOT COMPLETED** | Checklists and exact script exist; no recording was fabricated or uploaded and nothing was submitted. |
 
-Milestone 6 is locally implemented and verified, but the specification's deployed judge-readiness exit condition is **not yet a pass**. Publishing, deployment verification, recording, and submission still require their corresponding external steps.
+Milestone 6's implementation passes locally, and the deployed functional/WebMCP gates pass. The strict deployed judge-readiness exit condition remains pending until the final contrast correction is pushed and reverified and the two-prompt path is manually verified in ChatGPT's in-app browser. Public video publication and challenge submission also remain external manual steps.
 
 ## Judge-facing polish verified locally
 
@@ -26,31 +26,31 @@ Milestone 6 is locally implemented and verified, but the specification's deploye
 - The approved state says the media is still broken, displays the exact continuation prompt, and places **Apply manually** behind a visibly secondary “No agent available?” fallback.
 - Unsupported WebMCP state remains visible and explains that the full manual rescue needs no credentials or extension.
 - Loading, empty, error, ended/reset, and cleanup states have explicit judge-facing copy.
-- A skip link, keyboard activation, visible focus, improved text contrast, polite status announcements, and reduced-motion behavior are covered.
-- 820×1180 tablet and 390×844 stacked mobile checks pass without horizontal overflow; the WebMCP readiness badge remains visible.
+- A skip link, keyboard activation, visible focus, calculated WCAG AA body-text contrast, polite status announcements, and reduced-motion behavior are covered.
+- 820×1180 tablet and 390×844 stacked mobile checks pass without horizontal overflow; the mobile check completes the full fault → plan → approve → manual apply → recovered report path and rechecks overflow afterward.
 - Console errors and uncaught page errors are collected and required to remain empty in polish, screenshot, rehearsal, and golden-path browser tests.
 
 ## Commands and actual results
 
 Final working-tree gates:
 
-- `npm test` — **PASS**, 23 files / 124 tests, 2.78s wall time.
-- `npm run lint` — **PASS**, no errors or warnings, 2.67s wall time.
-- `npm run build` — **PASS**, 40 modules; 0.90 kB HTML, 25.68 kB CSS, 183.94 kB JS before gzip; 2.77s wall time.
-- `npm run test:browser` — **PASS**, 34 passed / 2 expected skips, 93.88s wall time. The skips were native WebMCP discovery in an ordinary Chrome profile and the opt-in installed-extension test.
+- `npm test` — **PASS**, 23 files / 124 tests, 2.56s wall time.
+- `npm run lint` — **PASS**, no errors or warnings, 2.35s wall time.
+- `npm run build` — **PASS**, 40 modules; 0.90 kB HTML, 25.73 kB CSS, 183.94 kB JS before gzip; 2.51s wall time.
+- `npm run test:browser` — **PASS**, 35 passed / 2 expected skips, 92.44s wall time. The skips were native WebMCP discovery in an ordinary Chrome profile and the opt-in installed-extension test.
 - `npm run test:spikes` — **PASS**, generated media/repeated negotiation/sender readback passed; native WebMCP discovery skipped in the ordinary profile; 5.33s wall time.
 - `npm run capture:screenshots` — **PASS**, four real-browser submission states, final run 9.2s.
-- `CALLSCOPE_WEBMCP_USER_DATA_DIR=<disposable-profile> npm run test:plugin` — **PASS**, Inspector 1.9.13 native bitrate path, 51.3s. The temporary profile was removed; the real profile was not modified.
+- `CALLSCOPE_WEBMCP_USER_DATA_DIR=<disposable-profile> npm run test:plugin` against the deployment — **PASS**, Inspector 1.9.13 discovered all seven exact tools and completed both native audio and bitrate paths in 17.30s. The temporary profile was removed; the real profile was not modified.
 
 The first unpacked-extension attempt failed with `ERR_BLOCKED_BY_CLIENT` for the assumed extension origin. The previously proven disposable-profile route was then used and passed. This failed attempt is not counted as a pass.
 
 Isolated candidate-clone gate:
 
 - Local Git clone plus overlay of the uncommitted candidate worktree, excluding `.git`, `node_modules`, `dist`, and `test-results`.
-- `npm ci` — **PASS**, 178 packages, 0 vulnerabilities, 1.00s.
-- `npm test` — **PASS**, 124 tests, 1.87s.
-- `npm run lint` — **PASS**, 1.11s.
-- `npm run build` — **PASS**, 1.13s.
+- `npm ci` — **PASS**, 178 packages, 0 vulnerabilities, 1.10s.
+- `npm test` — **PASS**, 124 tests, 2.13s.
+- `npm run lint` — **PASS**, 1.42s.
+- `npm run build` — **PASS**, 1.24s.
 
 The first sandboxed clone attempt failed because the sandbox denied execution of the installed `esbuild` binary. The first unrestricted clone attempt then found one lint error in the new rehearsal logger; it was fixed before the successful clean rerun above.
 
@@ -61,17 +61,18 @@ Npm warnings retained rather than hidden:
 
 ## Rehearsal timings
 
-Dedicated single-worker production-preview run:
+Dedicated single-worker deployed run:
 
-- Start click → truthful Healthy: **1.719s**.
-- Fault → diagnosis → stage → approval → manual apply → verification → report, cycle 1: **4.398s**.
-- Cycle 2: **4.557s**.
-- Cycle 3: **4.554s**.
+- Start click → truthful Healthy: **1.245s**.
+- Fault → diagnosis → stage → approval → manual apply → verification → report, cycle 1: **4.454s**.
+- Cycle 2: **4.489s**.
+- Cycle 3: **4.646s**.
+- Complete rehearsal command wall time: **16.88s**.
 
 Full-suite four-worker contention run:
 
-- Start click → truthful Healthy: **2.053s**.
-- The same three recovery cycles: **6.855s**, **6.434s**, and **6.797s**.
+- Start click → truthful Healthy: **2.039s**.
+- The same three recovery cycles: **6.330s**, **5.992s**, and **6.084s**.
 
 These are automated interaction completion times, not a claim about narration or external agent latency. The submission script is exactly 2:30 and reserves explicit time for explanation and two user prompts.
 
@@ -79,10 +80,12 @@ These are automated interaction completion times, not a claim about narration or
 
 - Repository URL `https://github.com/haitham113/callscope` returned HTTP 200 in a signed-out request.
 - Deployment URL `https://haitham113.github.io/callscope/` returned HTTP 200 over HTTPS.
-- Installed Inspector 1.9.13 completed the deployed bitrate rescue through native WebMCP in 31.3s.
-- After correcting the Playwright specs from root-absolute `/` navigation to base-path-relative `./`, the deployed suite produced **27 passes and 4 M6-only failures in 1.4 minutes**.
-- The 27 passes cover the judge shell, real audio and bitrate paths, three repeated audio rescues, three repeated bitrate rescues, lifecycle cleanup, negative safety cases, WebMCP audio flow, and tablet layout.
-- The four expected failures precisely show that Milestone 6 is not published: missing workflow strip/fallback callout, old approval copy, hidden mobile readiness badge, and the old reduced-motion duration.
+- The deployed HTML referenced the Milestone 6 asset bundle and the complete deployed suite produced **31/31 passes in 1.2 minutes**.
+- Those passes cover the judge shell, real audio and bitrate paths, three repeated audio rescues, three repeated bitrate rescues, lifecycle cleanup, negative safety cases, WebMCP audio flow, deliberate approval, responsive layouts, and reduced motion.
+- The initial strengthened deployed polish run produced **6/6 passes in 16.3s**, including the complete stacked mobile recovery flow. Review found its contrast selector was too narrow; a corrected all-visible-text audit exposed the active workflow caption at **3.92:1** on the deployed bundle.
+- The caption now uses `--text-soft`; the corrected production preview passes **6/6 in 21.1s**, including at least 4.5:1 across visible text in idle, healthy, staged, approved, and recovered workflow states. Deployment revalidation is pending.
+- Installed Inspector 1.9.13 discovered the seven exact registered tool names and invoked every tool while completing both deployed audio and bitrate rescues in **17.30s**.
+- Three consecutive deployed manual rehearsals passed with no console error or unhandled rejection in **16.88s** total.
 
 Earlier 404s during deployed testing were traced to newer tests navigating to the GitHub Pages domain root with `page.goto('/')`, not to origin flapping. Those tests now use `page.goto('./')`, making them portable to `/callscope/` and localhost.
 
@@ -101,7 +104,7 @@ The sampler now supports a `fresh` owned read: it waits for any in-flight publis
 
 ## Public-repository safety check
 
-- Candidate files scanned: 83.
+- Candidate files scanned: 86.
 - Sensitive path types (`.env`, private keys, `.pem`, `.p12`, `.pfx`): none.
 - Common AWS/GitHub/OpenAI token and private-key marker matches: none.
 - Tracked `node_modules`, `dist`, or `test-results`: none.
@@ -121,9 +124,8 @@ Synthetic sanitizer fixtures intentionally contain example IP/SDP/secret-shaped 
 
 ## Remaining actions requiring external authority or access
 
-1. Push this Milestone 6 revision, allowing the existing GitHub Pages workflow to deploy it.
-2. Rerun the 31-test deployed suite and require 31/31.
-3. Repeat both native Inspector audio/bitrate paths on the deployed Milestone 6 bundle.
-4. Manually complete the two-prompt golden path in ChatGPT's in-app browser.
-5. Record and verify the public YouTube video, then complete the external submission checklist.
-6. Submit only after explicit user confirmation through the submission workflow.
+1. Commit and push the final contrast correction and strengthened validation tests, then rerun the deployed polish gate.
+2. Manually complete the two-prompt golden path in ChatGPT's in-app browser.
+3. Confirm the repository commit history falls within the challenge period.
+4. Record and verify the public YouTube video, then add its URL to the challenge submission.
+5. Submit only after explicit user confirmation through the submission workflow.

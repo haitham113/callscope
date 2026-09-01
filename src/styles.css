@@ -283,6 +283,7 @@ a:focus-visible {
 .workflow-strip li.active { background: linear-gradient(120deg, rgba(102, 242, 174, 0.12), rgba(8, 16, 14, 0.98)); }
 .workflow-strip li.active > span { border-color: var(--green); color: #032117; background: var(--green); }
 .workflow-strip li.active strong { color: var(--green); }
+.workflow-strip li.active small { color: var(--text-soft); }
 
 .compatibility-callout {
   display: flex;
