@@ -13,6 +13,8 @@ function capabilities(overrides = {}) {
       pending_plan_id: null,
       pending_plan_status: null,
       webmcp_supported: true,
+      has_diagnosis: false,
+      has_verification: false,
     })),
     inspectCallState: vi.fn(() => ({
       ok: true,
@@ -34,6 +36,8 @@ function capabilities(overrides = {}) {
         allowed_actions: ['enable_audio_track'],
         findings: [{
           rank: 1,
+          code: 'OUTBOUND_AUDIO_TRACK_DISABLED',
+          title: 'Outbound audio track is disabled',
           severity: 'critical',
           confidence: 'high',
           evidence: [{ field: 'tracks.audio.enabled', value: false, role: 'primary' }],
@@ -136,6 +140,10 @@ describe('WebMCP tool handlers', () => {
     expect(diagnosis).toMatchObject({
       ok: true,
       diagnosis_id: 'diagnosis-1',
+      findings: [{
+        code: 'OUTBOUND_AUDIO_TRACK_DISABLED',
+        title: 'Outbound audio track is disabled',
+      }],
       needed_ids: { session_id: 'session-1', diagnosis_id: 'diagnosis-1' },
       suggested_next_tools: ['stage_recovery_plan'],
     })
@@ -147,6 +155,20 @@ describe('WebMCP tool handlers', () => {
       approval_applies_repair: false,
       suggested_next_tools: ['apply_recovery_action'],
     })
+  })
+
+  it('derives context continuation in the adapter without leaking internal workflow facts', async () => {
+    const handlers = createWebMcpToolHandlers(capabilities())
+
+    const context = await handlers.get_lab_context({})
+
+    expect(context).toMatchObject({
+      active_fault: 'disabled_audio',
+      pending_plan_status: null,
+      suggested_next_tools: ['inspect_call_state', 'run_call_diagnostics'],
+    })
+    expect(context.has_diagnosis).toBeUndefined()
+    expect(context.has_verification).toBeUndefined()
   })
 
   it('recursively sanitizes all success output including report data', async () => {

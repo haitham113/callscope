@@ -25,4 +25,10 @@ describe('WebMCP tool contracts', () => {
       annotations,
     }))).toMatchSnapshot()
   })
+
+  it('advertises the same closed input contract enforced by handler validation', () => {
+    expect(TOOL_DEFINITIONS.every(({ inputSchema }) =>
+      inputSchema.additionalProperties === false,
+    )).toBe(true)
+  })
 })

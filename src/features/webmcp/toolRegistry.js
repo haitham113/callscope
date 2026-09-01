@@ -5,24 +5,52 @@ import { detectWebMcpSupport } from './webMcpReadiness.js'
 
 let activeRegistration = null
 
-function unsupportedRegistration() {
+function unavailableRegistration(code) {
   return Object.freeze({
     supported: false,
     toolNames: Object.freeze([]),
     signal: null,
-    error: errorResult('WEBMCP_UNSUPPORTED'),
+    error: errorResult(code),
     dispose() {},
   })
 }
 
-export function registerCallScopeTools({ documentRef = globalThis.document, agent }) {
+function awaitRegistration(value, signal) {
+  if (signal.aborted) {
+    return Promise.reject(new DOMException('WebMCP registration cancelled.', 'AbortError'))
+  }
+  return new Promise((resolve, reject) => {
+    function onAbort() {
+      reject(new DOMException('WebMCP registration cancelled.', 'AbortError'))
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+    Promise.resolve(value).then(
+      (result) => {
+        signal.removeEventListener('abort', onAbort)
+        resolve(result)
+      },
+      (error) => {
+        signal.removeEventListener('abort', onAbort)
+        reject(error)
+      },
+    )
+  })
+}
+
+export async function registerCallScopeTools({
+  documentRef = globalThis.document,
+  agent,
+  lifecycleSignal,
+}) {
   const modelContext = documentRef?.modelContext
-  if (!detectWebMcpSupport(documentRef)) return unsupportedRegistration()
+  if (!detectWebMcpSupport(documentRef)) return unavailableRegistration('WEBMCP_UNSUPPORTED')
+  if (lifecycleSignal?.aborted) return unavailableRegistration('OPERATION_CANCELLED')
 
   if (activeRegistration) activeRegistration.dispose()
   const abortController = new AbortController()
   const handlers = createWebMcpToolHandlers(agent)
   let disposed = false
+  let removeLifecycleListener = () => {}
 
   const registration = {
     supported: true,
@@ -32,14 +60,21 @@ export function registerCallScopeTools({ documentRef = globalThis.document, agen
     dispose() {
       if (disposed) return
       disposed = true
+      removeLifecycleListener()
       abortController.abort('CallScope WebMCP lifecycle ended.')
       if (activeRegistration === registration) activeRegistration = null
     },
   }
+  if (lifecycleSignal) {
+    const onLifecycleAbort = () => registration.dispose()
+    lifecycleSignal.addEventListener('abort', onLifecycleAbort, { once: true })
+    removeLifecycleListener = () => lifecycleSignal.removeEventListener('abort', onLifecycleAbort)
+  }
+  activeRegistration = registration
 
   try {
     for (const definition of TOOL_DEFINITIONS) {
-      modelContext.registerTool(
+      await awaitRegistration(modelContext.registerTool(
         {
           name: definition.name,
           description: definition.description,
@@ -48,12 +83,15 @@ export function registerCallScopeTools({ documentRef = globalThis.document, agen
           execute: handlers[definition.name],
         },
         { signal: abortController.signal },
-      )
+      ), abortController.signal)
     }
-    activeRegistration = registration
+    if (disposed) return unavailableRegistration('OPERATION_CANCELLED')
     return Object.freeze(registration)
-  } catch {
+  } catch (error) {
+    const cancelled = disposed || abortController.signal.aborted || error?.name === 'AbortError'
     registration.dispose()
-    return unsupportedRegistration()
+    return unavailableRegistration(
+      cancelled ? 'OPERATION_CANCELLED' : 'WEBMCP_REGISTRATION_FAILED',
+    )
   }
 }

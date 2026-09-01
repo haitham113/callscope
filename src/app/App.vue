@@ -9,6 +9,7 @@ const store = useLabStore()
 const controller = createLabController(store)
 const human = controller.human
 let webMcpRegistration = null
+const webMcpLifecycle = new AbortController()
 const sourceCanvas = ref(null)
 const remoteVideo = ref(null)
 const startPending = ref(false)
@@ -167,11 +168,20 @@ function evidenceLabel(value) {
   return value === null ? 'Unavailable' : String(value)
 }
 
-onMounted(() => {
-  webMcpRegistration = registerCallScopeTools({ agent: controller.agent })
-  store.setWebMcpSupport(webMcpRegistration.supported)
+onMounted(async () => {
+  const registration = await registerCallScopeTools({
+    agent: controller.agent,
+    lifecycleSignal: webMcpLifecycle.signal,
+  })
+  if (webMcpLifecycle.signal.aborted) {
+    registration.dispose()
+    return
+  }
+  webMcpRegistration = registration
+  store.setWebMcpSupport(registration.supported)
 })
 onBeforeUnmount(() => {
+  webMcpLifecycle.abort('CallScope application unmounted.')
   webMcpRegistration?.dispose()
   webMcpRegistration = null
   void controller.dispose()

@@ -25,7 +25,7 @@ async function installModelContextDouble(page) {
     Object.defineProperty(document, 'modelContext', {
       configurable: true,
       value: {
-        registerTool(tool, { signal }) {
+        async registerTool(tool, { signal }) {
           const registration = { tool, signal, active: true }
           signal.addEventListener('abort', () => { registration.active = false }, { once: true })
           registrations.push(registration)
@@ -112,6 +112,8 @@ test('completes the real WebMCP audio rescue with separate human approval', asyn
   expect(diagnosed).toMatchObject({
     ok: true,
     findings: [{
+      code: 'OUTBOUND_AUDIO_TRACK_DISABLED',
+      title: 'Outbound audio track is disabled',
       severity: 'critical',
       confidence: 'high',
       allowed_recovery_actions: ['enable_audio_track'],
@@ -211,6 +213,7 @@ test('completes the real WebMCP audio rescue with separate human approval', asyn
     download_available: false,
   })
   expect(report.markdown).toContain('# CallScope Incident Report')
+  expect(report.markdown).toContain('## Sanitized evidence')
   await expect(page.getByTestId('incident-report')).toBeVisible()
 
   const timelineToolNames = await page.locator('[data-testid="timeline"] h3').allTextContents()

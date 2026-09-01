@@ -12,7 +12,11 @@ export const TOOL_DEFINITIONS = Object.freeze([
   Object.freeze({
     name: 'get_lab_context',
     description: 'Read a compact overview of the active CallScope lab and the safest next tools.',
-    inputSchema: Object.freeze({ type: 'object', properties: Object.freeze({}) }),
+    inputSchema: Object.freeze({
+      type: 'object',
+      properties: Object.freeze({}),
+      additionalProperties: false,
+    }),
     annotations: Object.freeze({ readOnlyHint: true }),
   }),
   Object.freeze({
@@ -28,6 +32,7 @@ export const TOOL_DEFINITIONS = Object.freeze([
         }),
       }),
       required: Object.freeze(['session_id']),
+      additionalProperties: false,
     }),
     annotations: Object.freeze({ readOnlyHint: true }),
   }),
@@ -50,6 +55,7 @@ export const TOOL_DEFINITIONS = Object.freeze([
         }),
       }),
       required: Object.freeze(['session_id', 'symptom']),
+      additionalProperties: false,
     }),
     annotations: Object.freeze({ readOnlyHint: true }),
   }),
@@ -79,6 +85,7 @@ export const TOOL_DEFINITIONS = Object.freeze([
         'reason',
         'expected_result',
       ]),
+      additionalProperties: false,
     }),
     annotations: Object.freeze({
       readOnlyHint: false,
@@ -96,6 +103,7 @@ export const TOOL_DEFINITIONS = Object.freeze([
         plan_id: Object.freeze({ type: 'string' }),
       }),
       required: Object.freeze(['session_id', 'plan_id']),
+      additionalProperties: false,
     }),
     annotations: Object.freeze({
       readOnlyHint: false,
@@ -119,6 +127,7 @@ export const TOOL_DEFINITIONS = Object.freeze([
         }),
       }),
       required: Object.freeze(['session_id', 'plan_id']),
+      additionalProperties: false,
     }),
     annotations: Object.freeze({ readOnlyHint: true }),
   }),
@@ -136,6 +145,7 @@ export const TOOL_DEFINITIONS = Object.freeze([
         }),
       }),
       required: Object.freeze(['session_id']),
+      additionalProperties: false,
     }),
     annotations: Object.freeze({
       readOnlyHint: false,

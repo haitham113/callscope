@@ -379,7 +379,8 @@ Input:
 ```json
 {
   "type": "object",
-  "properties": {}
+  "properties": {},
+  "additionalProperties": false
 }
 ```
 
@@ -413,7 +414,8 @@ Input:
       "enum": ["summary", "media", "connection", "all"]
     }
   },
-  "required": ["session_id"]
+  "required": ["session_id"],
+  "additionalProperties": false
 }
 ```
 
@@ -451,7 +453,8 @@ Input:
       "default": 2000
     }
   },
-  "required": ["session_id", "symptom"]
+  "required": ["session_id", "symptom"],
+  "additionalProperties": false
 }
 ```
 
@@ -484,7 +487,8 @@ Input:
     "reason": { "type": "string", "maxLength": 500 },
     "expected_result": { "type": "string", "maxLength": 300 }
   },
-  "required": ["session_id", "diagnosis_id", "action", "reason", "expected_result"]
+  "required": ["session_id", "diagnosis_id", "action", "reason", "expected_result"],
+  "additionalProperties": false
 }
 ```
 
@@ -518,7 +522,8 @@ Input:
     "session_id": { "type": "string" },
     "plan_id": { "type": "string" }
   },
-  "required": ["session_id", "plan_id"]
+  "required": ["session_id", "plan_id"],
+  "additionalProperties": false
 }
 ```
 
@@ -559,7 +564,8 @@ Input:
       "default": 2000
     }
   },
-  "required": ["session_id", "plan_id"]
+  "required": ["session_id", "plan_id"],
+  "additionalProperties": false
 }
 ```
 
@@ -591,7 +597,8 @@ Input:
       "default": "summary"
     }
   },
-  "required": ["session_id"]
+  "required": ["session_id"],
+  "additionalProperties": false
 }
 ```
 
@@ -851,6 +858,7 @@ All service and tool errors return a stable shape:
 Required error codes:
 
 - `WEBMCP_UNSUPPORTED`
+- `WEBMCP_REGISTRATION_FAILED`
 - `NO_ACTIVE_SESSION`
 - `SESSION_MISMATCH`
 - `INVALID_STATE_TRANSITION`

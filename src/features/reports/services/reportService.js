@@ -41,6 +41,10 @@ export function createIncidentReport({
 }
 
 export function createIncidentReportMarkdown(report) {
+  const evidenceLines = report.sanitized_evidence.map((item) => {
+    const role = item.role ? ` (${item.role})` : ''
+    return `- ${item.field}: ${JSON.stringify(item.value)}${role}`
+  })
   return sanitizeValue([
     '# CallScope Incident Report',
     '',
@@ -56,6 +60,10 @@ export function createIncidentReportMarkdown(report) {
     '## Root cause',
     '',
     report.root_cause,
+    '',
+    '## Sanitized evidence',
+    '',
+    ...(evidenceLines.length ? evidenceLines : ['- No decisive evidence was available.']),
     '',
     '## Approved recovery',
     '',

@@ -14,7 +14,6 @@ import { createCleanupQuarantine } from './cleanupQuarantine.js'
 import { createDemoMedia } from './demoMediaService.js'
 import { createLoopbackPeerService } from './loopbackPeerService.js'
 import { errorResult, resultFromError } from '../../../shared/errors/serviceErrors.js'
-import { suggestedToolsForContext } from '../../webmcp/toolWorkflow.js'
 
 function abortableDelay(milliseconds, signal) {
   return new Promise((resolve, reject) => {
@@ -606,17 +605,6 @@ export function createLabController(store) {
     return store.sessionId === sessionId ? { ok: true } : errorResult('SESSION_MISMATCH')
   }
 
-  function suggestedContextTools() {
-    return suggestedToolsForContext({
-      sessionId: store.sessionId,
-      state: store.state,
-      planStatus: store.recoveryPlan?.status,
-      hasVerification: Boolean(store.verification),
-      hasDiagnosis: Boolean(store.diagnosis),
-      activeFault: store.activeFault,
-    })
-  }
-
   function getLabContext() {
     return {
       ok: true,
@@ -627,8 +615,9 @@ export function createLabController(store) {
       pending_plan_id: store.recoveryPlan?.id ?? null,
       pending_plan_status: store.recoveryPlan?.status ?? null,
       webmcp_supported: store.webMcpSupported,
+      has_diagnosis: Boolean(store.diagnosis),
+      has_verification: Boolean(store.verification),
       limitations: store.sessionId ? [] : ['No active session is available; start the lab in CallScope.'],
-      suggested_next_tools: suggestedContextTools(),
     }
   }
 

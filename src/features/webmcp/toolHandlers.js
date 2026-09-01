@@ -1,7 +1,11 @@
 import { sanitizeValue } from '../diagnostics/services/sanitizer.js'
 import { resultFromError } from '../../shared/errors/serviceErrors.js'
 import { TOOL_DEFINITIONS } from './toolSchemas.js'
-import { suggestedToolsAfter, suggestedToolsForError } from './toolWorkflow.js'
+import {
+  suggestedToolsAfter,
+  suggestedToolsForContext,
+  suggestedToolsForError,
+} from './toolWorkflow.js'
 
 const REQUIRED_CAPABILITIES = Object.freeze([
   'getLabContext',
@@ -126,10 +130,24 @@ export function createWebMcpToolHandlers(agent) {
       const result = await agent.getLabContext()
       if (!result.ok) return result
       return {
-        ...result,
+        ok: true,
+        session_id: result.session_id,
+        lab_state: result.lab_state,
+        health_status: result.health_status,
+        active_fault: result.active_fault,
+        pending_plan_id: result.pending_plan_id,
+        pending_plan_status: result.pending_plan_status,
+        webmcp_supported: result.webmcp_supported,
         limitations: result.limitations ?? [],
         needed_ids: result.session_id ? { session_id: result.session_id } : {},
-        suggested_next_tools: result.suggested_next_tools ?? [],
+        suggested_next_tools: suggestedToolsForContext({
+          sessionId: result.session_id,
+          state: result.lab_state,
+          planStatus: result.pending_plan_status,
+          hasVerification: result.has_verification,
+          hasDiagnosis: result.has_diagnosis,
+          activeFault: result.active_fault,
+        }),
       }
     }),
 
@@ -156,6 +174,8 @@ export function createWebMcpToolHandlers(agent) {
       if (!result.ok) return result
       const findings = result.diagnosis.findings.map((finding) => ({
         rank: finding.rank,
+        code: finding.code,
+        title: finding.title,
         severity: finding.severity,
         confidence: finding.confidence,
         evidence: finding.evidence,

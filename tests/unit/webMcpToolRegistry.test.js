@@ -21,20 +21,20 @@ function agentCapabilities() {
 }
 
 describe('WebMCP lifecycle registration', () => {
-  it('feature-detects support and leaves unsupported manual environments untouched', () => {
-    const result = registerCallScopeTools({ documentRef: {}, agent: agentCapabilities() })
+  it('feature-detects support and leaves unsupported manual environments untouched', async () => {
+    const result = await registerCallScopeTools({ documentRef: {}, agent: agentCapabilities() })
     expect(result).toMatchObject({ supported: false, toolNames: [] })
     expect(result.error).toMatchObject({ ok: false, error: { code: 'WEBMCP_UNSUPPORTED' } })
   })
 
-  it('registers exactly seven tools with one abort signal and prevents remount duplicates', () => {
+  it('registers exactly seven tools with one abort signal and prevents remount duplicates', async () => {
     const registrations = []
     const modelContext = {
       registerTool: vi.fn((tool, options) => registrations.push({ tool, options })),
     }
     const documentRef = { modelContext }
-    const first = registerCallScopeTools({ documentRef, agent: agentCapabilities() })
-    const second = registerCallScopeTools({ documentRef, agent: agentCapabilities() })
+    const first = await registerCallScopeTools({ documentRef, agent: agentCapabilities() })
+    const second = await registerCallScopeTools({ documentRef, agent: agentCapabilities() })
 
     expect(first.signal.aborted).toBe(true)
     expect(second.supported).toBe(true)
@@ -47,6 +47,59 @@ describe('WebMCP lifecycle registration', () => {
 
     second.dispose()
     expect(second.signal.aborted).toBe(true)
+    second.dispose()
+  })
+
+  it('does not report readiness when asynchronous registration rejects', async () => {
+    const modelContext = {
+      registerTool: vi.fn(() => Promise.reject(new Error('registration rejected'))),
+    }
+
+    const result = await registerCallScopeTools({
+      documentRef: { modelContext },
+      agent: agentCapabilities(),
+    })
+
+    expect(result).toMatchObject({
+      supported: false,
+      toolNames: [],
+      error: { ok: false, error: { code: 'WEBMCP_REGISTRATION_FAILED' } },
+    })
+  })
+
+  it('aborts an in-flight registration on unmount and lets a remount replace it once', async () => {
+    let finishFirstRegistration
+    const firstRegistration = new Promise((resolve) => { finishFirstRegistration = resolve })
+    const registrations = []
+    const modelContext = {
+      registerTool: vi.fn((tool, options) => {
+        registrations.push({ tool, options })
+        if (registrations.length === 1) return firstRegistration
+        return undefined
+      }),
+    }
+    const lifecycle = new AbortController()
+    const firstPending = registerCallScopeTools({
+      documentRef: { modelContext },
+      agent: agentCapabilities(),
+      lifecycleSignal: lifecycle.signal,
+    })
+
+    lifecycle.abort('component unmounted')
+    const second = await registerCallScopeTools({
+      documentRef: { modelContext },
+      agent: agentCapabilities(),
+    })
+    finishFirstRegistration()
+    const first = await firstPending
+
+    expect(first).toMatchObject({
+      supported: false,
+      error: { ok: false, error: { code: 'OPERATION_CANCELLED' } },
+    })
+    expect(registrations[0].options.signal.aborted).toBe(true)
+    expect(second.supported).toBe(true)
+    expect(registrations.filter(({ options }) => !options.signal.aborted)).toHaveLength(7)
     second.dispose()
   })
 })

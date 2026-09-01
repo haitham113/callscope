@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { createIncidentReport } from '../../src/features/reports/services/reportService.js'
+import {
+  createIncidentReport,
+  createIncidentReportMarkdown,
+} from '../../src/features/reports/services/reportService.js'
 
 function reportInput(overrides = {}) {
   return {
@@ -31,5 +34,21 @@ describe('incident report identity', () => {
     expect(repeated.id).toBe(first.id)
     expect(changed.id).not.toBe(first.id)
     expect(first.incident_revision).toBe(7)
+  })
+
+  it('includes the required sanitized evidence section in Markdown output', () => {
+    const report = createIncidentReport(reportInput({
+      diagnosis: {
+        findings: [{
+          title: 'Outbound audio track is disabled',
+          evidence: [{ field: 'tracks.audio.enabled', value: false, role: 'primary' }],
+        }],
+      },
+    }))
+
+    const markdown = createIncidentReportMarkdown(report)
+
+    expect(markdown).toContain('## Sanitized evidence')
+    expect(markdown).toContain('tracks.audio.enabled')
   })
 })
