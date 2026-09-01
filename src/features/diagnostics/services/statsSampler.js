@@ -117,9 +117,14 @@ export function createStatsSampler({ outboundPeer, inboundPeer, onSample, onErro
   let activeSamplePromise = null
   let stopped = false
 
-  function sample({ notify = true, signal } = {}) {
+  function sample({ notify = true, signal, fresh = false } = {}) {
     if (stopped) return Promise.resolve(null)
-    if (activeSamplePromise) return abortableView(activeSamplePromise, signal)
+    if (activeSamplePromise) {
+      const activeView = abortableView(activeSamplePromise, signal)
+      return fresh
+        ? activeView.then(() => sample({ notify, signal, fresh: true }))
+        : activeView
+    }
 
     const operation = (async () => {
       try {

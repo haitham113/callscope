@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test'
 
 async function startHealthy(page) {
-  await page.goto('/')
+  await page.goto('./')
   await page.getByTestId('start-demo').click()
   await expect(page.getByTestId('health-status')).toContainText('Healthy', { timeout: 20_000 })
 }

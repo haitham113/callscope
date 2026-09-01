@@ -183,7 +183,7 @@ export function createLabController(store) {
 
   async function takeOwnedSample(owner, signal) {
     assertOperationOwned(owner, signal)
-    const snapshot = await sampler.sample({ notify: false, signal })
+    const snapshot = await sampler.sample({ notify: false, signal, fresh: true })
     assertOperationOwned(owner, signal)
     if (!snapshot) throw new Error('Authoritative WebRTC statistics are unavailable.')
     previousSample = currentSample

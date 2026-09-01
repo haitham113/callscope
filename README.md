@@ -4,7 +4,11 @@
 
 CallScope is a browser-based workspace where a developer and an AI agent inspect, diagnose, repair, and verify a live WebRTC call together.
 
-Instead of asking an agent to interpret screenshots or copied logs, CallScope exposes the active page's peer-connection, media-track, sender, and health state through seven focused WebMCP tools. The current implementation completes the safety-hardened WebMCP disabled-audio rescue against the same runtime used by the manual controls, including human-only approval, bound and abortable operations, recursive sanitization, stable errors, and fresh authoritative verification.
+Instead of asking an agent to interpret screenshots or copied logs, CallScope exposes the active page's peer-connection, media-track, sender, and health state through seven focused WebMCP tools. The implementation completes both the safety-hardened disabled-audio hero rescue and the secondary constrained-video-bitrate rescue against the same runtime used by the manual controls.
+
+**Live application:** <https://haitham113.github.io/callscope/>
+
+The URL is the configured deployment target. See [verified limitations](#verified-limitations) before relying on its current deployment status.
 
 > Observe → Diagnose → Explain → Propose repair → Human approval → Apply → Verify
 
@@ -62,6 +66,16 @@ The default demonstration uses a real, deterministic WebRTC loopback session:
 The visually secondary **Apply manually** control exercises the same shared runtime when WebMCP is unavailable.
 
 The intended result is visible and measurable: **Critical → Recovering → Healthy**.
+
+## Submission Screenshots
+
+| Healthy | Staged recovery |
+| --- | --- |
+| ![Healthy generated WebRTC call](docs/screenshots/01-healthy.png) | ![Staged audio recovery](docs/screenshots/02-staged-recovery.png) |
+
+| Approved, still broken | Before/after recovery |
+| --- | --- |
+| ![Human approval recorded while audio remains disabled](docs/screenshots/03-approved-still-broken.png) | ![Recovered before and after comparison](docs/screenshots/04-before-after-recovery.png) |
 
 ## Why WebMCP Is Essential
 
@@ -206,6 +220,8 @@ Core responsibilities include:
 
 All active session data remains in browser memory. Reloading the page returns CallScope to a clean state.
 
+See [docs/architecture.md](docs/architecture.md) for module ownership, state binding, WebMCP capability separation, privacy boundaries, cleanup, and deployment flow.
+
 ## Technology
 
 - Vue 3 Composition API
@@ -232,7 +248,7 @@ All active session data remains in browser memory. Reloading the page returns Ca
 ### Install and start
 
 ```bash
-npm install
+npm ci
 npm run dev
 ```
 
@@ -255,6 +271,8 @@ npm run lint
 npm run build
 npm run test:e2e
 npm run test:spikes
+npm run test:plugin
+npm run capture:screenshots
 ```
 
 To run the installed Inspector extension-message check, provide either a
@@ -266,6 +284,8 @@ CALLSCOPE_WEBMCP_USER_DATA_DIR=/path/to/temporary-profile npm run test:plugin
 
 The browser suite also builds the production application before starting its
 local preview server.
+
+`npm run test:plugin` requires an installed WebMCP Inspector profile path as described below; without that environment it is expected to skip rather than fabricate native plugin evidence. `npm run capture:screenshots` regenerates the four submission images from real generated media in the production preview.
 
 The critical browser checks are:
 
@@ -301,6 +321,18 @@ CallScope is intended to be tested in:
 
 Browser statistics vary. CallScope treats authoritative track and sender state as primary evidence and reports unavailable metrics as unavailable rather than inventing zero values.
 
+## Verified Limitations
+
+- WebMCP is experimental and the complete agent path requires a client that exposes `document.modelContext.registerTool()`.
+- ChatGPT's in-app browser cannot be automated from this repository; its deployed golden path must be verified manually in that supported client.
+- The installed Inspector/plugin check requires a temporary Chrome profile or unpacked extension supplied through `CALLSCOPE_WEBMCP_USER_DATA_DIR` or `CALLSCOPE_WEBMCP_EXTENSION_PATH`.
+- The manual fallback works in modern Chromium when WebMCP is absent. Safari and Firefox are not claimed as supported judging clients.
+- Packet loss, jitter, RTT, measured bitrate, frame rate, and audio energy vary by browser and sample window. Unavailable values stay unavailable and do not override authoritative track/sender evidence.
+- Visible video degradation is browser-dependent; sender-parameter readback, not appearance, proves the configured cap and restoration.
+- Incident reports render on screen and can be returned as Markdown through WebMCP; file download and PDF export are intentionally not implemented.
+- Active state is in memory. Reloading intentionally resets the incident instead of persisting it.
+- The configured public deployment can lag the working tree until an authorized push completes the GitHub Pages workflow. Consult [the Milestone 6 validation record](docs/callscope_milestone6_validation.md) for the current verified status.
+
 ## Privacy
 
 - Media is generated locally; CallScope does not require real camera or microphone input.
@@ -329,3 +361,7 @@ CallScope focuses on one polished browser-based rescue experience. It does not r
 CallScope is built for the [OpenAI WebMCP Challenge](https://openai.com/webmcp-challenge/).
 
 Its central idea is simple: the browser UI remains the shared workspace, WebMCP gives the agent structured access to the live call, and the human retains final authority over every repair.
+
+Submission materials are synchronized in [`docs/submission/`](docs/submission/): the English challenge description, exact 2:30 demo script, public YouTube recording checklist, and final submission checklist.
+
+CallScope is open source under the [MIT License](LICENSE).

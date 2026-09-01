@@ -71,6 +71,19 @@ const canDiagnose = computed(() =>
 )
 const approved = computed(() => recoveryPlan.value?.status === 'approved')
 const diagnosisFinding = computed(() => diagnosis.value?.findings?.[0] ?? null)
+const workflowPhase = computed(() => {
+  if (verification.value || incidentReport.value) return 'verify'
+  if (['recovering', 'verifying'].includes(state.value)) return 'recover'
+  if (recoveryPlan.value?.status === 'approved') return 'continue'
+  if (recoveryPlan.value?.status === 'staged' || state.value === 'awaiting_approval') return 'approve'
+  if (activeFault.value || state.value === 'diagnosing') return 'diagnose'
+  return 'observe'
+})
+const startOverlayTitle = computed(() => {
+  if (state.value === 'failed') return 'The last start did not complete'
+  if (state.value === 'ended') return 'Lab reset complete'
+  return 'Your rescue room is ready'
+})
 
 const metricCards = computed(() => [
   {
@@ -199,6 +212,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
+  <a class="skip-link" href="#workspace">Skip to operations console</a>
   <main class="app-shell">
     <header class="topbar">
       <a class="brand" href="#workspace" aria-label="CallScope home">
@@ -236,6 +250,19 @@ onBeforeUnmount(() => {
       </p>
     </section>
 
+    <ol class="workflow-strip" data-testid="workflow-strip" aria-label="Recovery workflow">
+      <li :class="{ active: workflowPhase === 'observe' }"><span>1</span><strong>Observe</strong><small>Start and watch</small></li>
+      <li :class="{ active: workflowPhase === 'diagnose' }"><span>2</span><strong>Diagnose</strong><small>Inspect evidence</small></li>
+      <li :class="{ active: workflowPhase === 'approve' }"><span>3</span><strong>Approve</strong><small>Human decision</small></li>
+      <li :class="{ active: ['continue', 'recover'].includes(workflowPhase) }"><span>4</span><strong>Recover</strong><small>Agent continues</small></li>
+      <li :class="{ active: workflowPhase === 'verify' }"><span>5</span><strong>Verify</strong><small>Before and after</small></li>
+    </ol>
+
+    <section v-if="!webMcpSupported" class="compatibility-callout" data-testid="webmcp-fallback" role="status">
+      <span aria-hidden="true">i</span>
+      <p><strong>WebMCP is not detected in this browser.</strong> The manual rescue remains fully available—no credentials or extension are required.</p>
+    </section>
+
     <section id="workspace" class="workspace">
       <article class="panel media-panel">
         <div class="panel-heading">
@@ -254,7 +281,7 @@ onBeforeUnmount(() => {
 
           <div v-if="canStart" class="start-overlay">
             <span class="start-orbit" aria-hidden="true"><span></span></span>
-            <h3>{{ state === 'failed' ? 'The last start did not complete' : 'Your rescue room is ready' }}</h3>
+            <h3>{{ startOverlayTitle }}</h3>
             <p>One click creates two real peer connections with generated audio and video.</p>
             <button class="primary-button" type="button" data-testid="start-demo" @click="startLab">
               <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m7 5 8 5-8 5V5Z" /></svg>
@@ -331,7 +358,7 @@ onBeforeUnmount(() => {
             <span class="panel-kicker">Call health</span>
             <span class="score">{{ healthScore === null ? '—' : healthScore }}<small>/100</small></span>
           </div>
-          <div class="health-badge" :class="healthTone" data-testid="health-status">
+          <div class="health-badge" :class="healthTone" data-testid="health-status" role="status" aria-live="polite" aria-atomic="true">
             <span class="health-glyph" aria-hidden="true">
               <svg viewBox="0 0 24 24"><path d="M4 12h4l2-5 4 10 2-5h4" /></svg>
             </span>
@@ -458,7 +485,11 @@ onBeforeUnmount(() => {
           <p class="sanitization-note">Generated media only · raw IP addresses, SDP, and device labels excluded.</p>
         </article>
 
-        <p v-if="error" class="error-banner" role="alert">{{ error }}</p>
+        <section v-if="error" class="error-banner" role="alert">
+          <strong>Operation needs attention</strong>
+          <p>{{ error }}</p>
+          <small>Use End / Reset to return to a clean lab, then start again.</small>
+        </section>
       </section>
 
       <aside class="right-stack">
@@ -475,8 +506,8 @@ onBeforeUnmount(() => {
             <li v-for="event in [...timeline].reverse()" :key="event.id">
               <span class="timeline-node" :class="event.actor.toLowerCase()"></span>
               <div>
-                <p><strong>{{ event.actor }}</strong><time>{{ formatTime(event.createdAt) }}</time></p>
-                <h3>{{ event.title }}</h3>
+                <p><strong :class="['actor-badge', event.actor.toLowerCase()]">{{ event.actor }}</strong><time>{{ formatTime(event.createdAt) }}</time></p>
+                <h3 :class="{ 'tool-name': event.actor === 'Agent' }"><code v-if="event.actor === 'Agent'">{{ event.title }}</code><template v-else>{{ event.title }}</template></h3>
                 <span>{{ event.detail }}</span>
                 <details v-if="event.evidence">
                   <summary>Sanitized evidence</summary>
@@ -548,17 +579,24 @@ onBeforeUnmount(() => {
             </details>
 
             <div v-if="recoveryPlan.status === 'staged'" class="approval-actions">
-              <button class="primary-button" type="button" data-testid="approve-recovery" @click="approveRecovery">Approve recovery</button>
+              <div class="approval-gate">
+                <span aria-hidden="true">✓</span>
+                <p><strong>Approval records consent only.</strong> The call stays broken until the approved action is applied in a separate step.</p>
+              </div>
+              <button class="primary-button approval-button" type="button" data-testid="approve-recovery" @click="approveRecovery">Approve recovery</button>
               <button class="secondary-button" type="button" data-testid="reject-recovery" @click="rejectRecovery">Reject</button>
-              <small>Approval changes application state only. It does not change media.</small>
             </div>
 
             <div v-if="approved" class="approved-state" data-testid="approved-instruction">
+              <span class="approval-recorded">✓ Approval recorded · media is still broken</span>
               <strong>Recovery approved. Tell the agent to continue.</strong>
-              <p>“Approved. Apply the repair, verify recovery, and generate the report.”</p>
-              <button class="manual-apply-button" type="button" data-testid="apply-manually" :disabled="operationPending" @click="applyManually">
-                {{ operationPending ? 'Applying and verifying…' : 'Apply manually' }}
-              </button>
+              <p class="continuation-prompt">“Approved. Apply the repair, verify recovery, and generate the report.”</p>
+              <div class="manual-fallback" data-testid="manual-fallback">
+                <span>No agent available?</span>
+                <button class="manual-apply-button" type="button" data-testid="apply-manually" :disabled="operationPending" @click="applyManually">
+                  {{ operationPending ? 'Applying and verifying…' : 'Apply manually' }}
+                </button>
+              </div>
             </div>
           </div>
         </article>
@@ -611,7 +649,7 @@ onBeforeUnmount(() => {
 
     <footer>
       <p>Generated media stays in this page. No recording, raw IP display, or external media service.</p>
-      <span>Milestone 5 · Bitrate observability</span>
+      <span>Submission build · Milestone 6</span>
     </footer>
   </main>
 </template>

@@ -178,7 +178,7 @@ test('completes the real WebMCP audio rescue with separate human approval', asyn
   const compared = await invoke(page, 'compare_to_failure_baseline', {
     session_id: sessionId,
     plan_id: staged.plan_id,
-    sample_duration_ms: 1000,
+    sample_duration_ms: 2000,
   })
   expect(compared).toMatchObject({
     ok: true,

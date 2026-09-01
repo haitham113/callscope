@@ -114,6 +114,43 @@ describe('stats sampler lifecycle', () => {
     await sampler.stop()
   })
 
+  it('waits for an overlapping published sample before taking a fresh owned sample', async () => {
+    let resolveFirstOutbound
+    let resolveFirstInbound
+    const firstOutbound = new Promise((resolve) => { resolveFirstOutbound = resolve })
+    const firstInbound = new Promise((resolve) => { resolveFirstInbound = resolve })
+    const outboundPeer = {
+      getStats: vi.fn()
+        .mockReturnValueOnce(firstOutbound)
+        .mockResolvedValue(new Map()),
+    }
+    const inboundPeer = {
+      getStats: vi.fn()
+        .mockReturnValueOnce(firstInbound)
+        .mockResolvedValue(new Map()),
+    }
+    const published = []
+    const sampler = createStatsSampler({
+      outboundPeer,
+      inboundPeer,
+      onSample: (sample) => published.push(sample),
+    })
+
+    const scheduledSample = sampler.sample()
+    const ownedSample = sampler.sample({ notify: false, fresh: true })
+    resolveFirstOutbound(new Map())
+    resolveFirstInbound(new Map())
+
+    const scheduled = await scheduledSample
+    const owned = await ownedSample
+
+    expect(outboundPeer.getStats).toHaveBeenCalledTimes(2)
+    expect(inboundPeer.getStats).toHaveBeenCalledTimes(2)
+    expect(owned).not.toBe(scheduled)
+    expect(published).toEqual([scheduled])
+    await sampler.stop()
+  })
+
   it('reduces the selected ICE path to safe candidate categories only', async () => {
     const outboundReport = new Map([
       ['transport', { id: 'transport', type: 'transport', selectedCandidatePairId: 'pair' }],
