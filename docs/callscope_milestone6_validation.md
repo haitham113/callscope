@@ -10,12 +10,12 @@ Scope: production reliability, judge-facing polish, synchronized documentation, 
 | Local production preview in Chrome | **PASS** | Full manual and WebMCP audio/video flows, negative paths, responsive/accessibility checks, screenshots, repeated rehearsals, and console/unhandled-error assertions passed. |
 | Installed WebMCP Inspector 1.9.13 against public deployment | **PASS** | Exact discovery of all seven tools plus native extension-message audio and bitrate rescues passed in a disposable Chrome profile in 17.30s. |
 | Isolated candidate clone with fresh dependencies | **PASS** | `npm ci`, 124 tests, lint, and production build passed; npm reported 0 vulnerabilities. |
-| Public repository | **PASS** | `origin/main` resolves to Milestone 6 commit `5ea9b2b`; signed-out HTTPS returned 200 and the candidate safety scan found no secret-like paths/patterns, tracked generated directories, or files over 5 MB. |
-| Current public deployment | **FINAL CONTRAST PATCH PENDING** | The complete deployed Chrome suite passed 31/31 in 1.2 minutes and the strengthened mobile flow passed. A broader visible-text audit then found the active “Start and watch” caption at 3.92:1; the one-rule local correction passes across idle, healthy, staged, approved, and recovered states but is not deployed yet. |
+| Public repository | **PASS** | `origin/main` resolves to final Milestone 6 contrast-validation commit `3d951f7`; signed-out HTTPS returned 200 and the candidate safety scan found no secret-like paths/patterns, tracked generated directories, or files over 5 MB. |
+| Current public deployment | **PASS** | The deployed HTML serves `index-Drsef2WC.css`, whose active-workflow-caption rule matches `3d951f7`. The final traced polish gate passed 6/6 in 29.9s with the corrected five-state visible-text audit, zero console-error events, and zero uncaught page-error events. |
 | ChatGPT in-app browser | **NOT VERIFIED** | This supported client is unavailable from the current environment. |
 | Public YouTube recording and challenge submission | **NOT COMPLETED** | Checklists and exact script exist; no recording was fabricated or uploaded and nothing was submitted. |
 
-Milestone 6's implementation passes locally, and the deployed functional/WebMCP gates pass. The strict deployed judge-readiness exit condition remains pending until the final contrast correction is pushed and reverified and the two-prompt path is manually verified in ChatGPT's in-app browser. Public video publication and challenge submission also remain external manual steps.
+Milestone 6's implementation and deployed functional, WebMCP, and contrast gates pass. The strict judge-readiness exit condition remains pending until the two-prompt path is manually verified in ChatGPT's in-app browser. Public video publication and challenge submission also remain external manual steps.
 
 ## Judge-facing polish verified locally
 
@@ -41,6 +41,7 @@ Final working-tree gates:
 - `npm run test:spikes` — **PASS**, generated media/repeated negotiation/sender readback passed; native WebMCP discovery skipped in the ordinary profile; 5.33s wall time.
 - `npm run capture:screenshots` — **PASS**, four real-browser submission states, final run 9.2s.
 - `CALLSCOPE_WEBMCP_USER_DATA_DIR=<disposable-profile> npm run test:plugin` against the deployment — **PASS**, Inspector 1.9.13 discovered all seven exact tools and completed both native audio and bitrate paths in 17.30s. The temporary profile was removed; the real profile was not modified.
+- `CALLSCOPE_BASE_URL=https://haitham113.github.io/callscope/ npx playwright test tests/browser/milestone6-polish.spec.js --trace=on` — **PASS**, 6/6 in 29.9s runner time and 30.00s wall time. Trace inspection across all six tests found zero console-error and zero uncaught page-error events. This was the only test file rerun after deployment of `3d951f7`.
 
 The first unpacked-extension attempt failed with `ERR_BLOCKED_BY_CLIENT` for the assumed extension origin. The previously proven disposable-profile route was then used and passed. This failed attempt is not counted as a pass.
 
@@ -83,7 +84,8 @@ These are automated interaction completion times, not a claim about narration or
 - The deployed HTML referenced the Milestone 6 asset bundle and the complete deployed suite produced **31/31 passes in 1.2 minutes**.
 - Those passes cover the judge shell, real audio and bitrate paths, three repeated audio rescues, three repeated bitrate rescues, lifecycle cleanup, negative safety cases, WebMCP audio flow, deliberate approval, responsive layouts, and reduced motion.
 - The initial strengthened deployed polish run produced **6/6 passes in 16.3s**, including the complete stacked mobile recovery flow. Review found its contrast selector was too narrow; a corrected all-visible-text audit exposed the active workflow caption at **3.92:1** on the deployed bundle.
-- The caption now uses `--text-soft`; the corrected production preview passes **6/6 in 21.1s**, including at least 4.5:1 across visible text in idle, healthy, staged, approved, and recovered workflow states. Deployment revalidation is pending.
+- Commit `3d951f7` changed the caption to `--text-soft`. The deployed HTML now references `index-Drsef2WC.css`, and that bundle contains `.workflow-strip li.active small{color:var(--text-soft)}`.
+- The final traced deployed polish gate passed **6/6 in 29.9s** (30.00s wall time), including at least 4.5:1 across visible text in idle, healthy, staged, approved, and recovered workflow states. Inspection of all six trace archives found **0** console-error events and **0** uncaught page-error events (the browser event used for unhandled rejections).
 - Installed Inspector 1.9.13 discovered the seven exact registered tool names and invoked every tool while completing both deployed audio and bitrate rescues in **17.30s**.
 - Three consecutive deployed manual rehearsals passed with no console error or unhandled rejection in **16.88s** total.
 
@@ -124,8 +126,7 @@ Synthetic sanitizer fixtures intentionally contain example IP/SDP/secret-shaped 
 
 ## Remaining actions requiring external authority or access
 
-1. Commit and push the final contrast correction and strengthened validation tests, then rerun the deployed polish gate.
-2. Manually complete the two-prompt golden path in ChatGPT's in-app browser.
-3. Confirm the repository commit history falls within the challenge period.
-4. Record and verify the public YouTube video, then add its URL to the challenge submission.
-5. Submit only after explicit user confirmation through the submission workflow.
+1. Manually complete the two-prompt golden path in ChatGPT's in-app browser.
+2. Confirm the repository commit history falls within the challenge period.
+3. Record and verify the public YouTube video, then add its URL to the challenge submission.
+4. Submit only after explicit user confirmation through the submission workflow.

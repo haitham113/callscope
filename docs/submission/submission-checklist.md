@@ -19,7 +19,7 @@ Checked items are backed by repository or validation evidence. External publicat
 - [x] Deploy the Milestone 6 commit after explicit authorization.
 - [x] Confirm the deployed bundle contains the bitrate fault and Milestone 6 polish.
 - [x] Run the full deployed Chrome suite without a 404, console error, or unhandled rejection.
-- [ ] Deploy the final active-workflow-caption contrast correction and rerun the deployed polish gate.
+- [x] Deploy the final active-workflow-caption contrast correction and rerun the deployed polish gate (6/6 in 29.9s; 30.00s wall time; zero console/page errors in all six traces).
 - [ ] Complete the two-prompt golden path in ChatGPT's in-app browser.
 - [x] Complete the audio and bitrate paths through the installed WebMCP plugin on the deployed origin.
 
@@ -45,7 +45,7 @@ Checked items are backed by repository or validation evidence. External publicat
 - [x] Verify manual recovery remains usable without WebMCP.
 - [x] Verify laptop, tablet, and stacked mobile layouts without horizontal overflow.
 - [x] Verify keyboard navigation, visible focus, and reduced motion.
-- [ ] Verify the corrected visible-text contrast audit on the deployed bundle.
+- [x] Verify the corrected visible-text contrast audit on the deployed bundle.
 - [x] Verify loading, unsupported, empty, error, end, and reset states.
 - [x] Confirm no console errors or unhandled rejections through the entire path.
 - [ ] Submit only after every external item above is checked and live evidence is recorded.
