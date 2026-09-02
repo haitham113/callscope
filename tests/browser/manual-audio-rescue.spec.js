@@ -83,8 +83,14 @@ test('completes the real manual disabled-audio rescue with authoritative verific
   await introduceAudioFault(page)
   await stagePlan(page)
 
+  const countdown = page.getByTestId('plan-expiry-countdown')
+  await expect(countdown).toHaveText(/Expires in \d+ seconds/)
+  const initialRemaining = Number((await countdown.textContent()).match(/\d+/)?.[0])
+  await page.waitForTimeout(1_200)
+  const updatedRemaining = Number((await countdown.textContent()).match(/\d+/)?.[0])
+  expect(updatedRemaining).toBeLessThan(initialRemaining)
+
   await expect(page.getByTestId('apply-manually')).toHaveCount(0)
-  await page.waitForTimeout(1200)
   await expect(page.getByTestId('audio-track-status')).toContainText('disabled')
 
   await approveAndApply(page)

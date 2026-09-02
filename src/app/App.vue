@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useLabStore } from '../features/lab/stores/labStore.js'
 import { createLabController } from '../features/lab/services/labController.js'
+import { useRecoveryPlanCountdown } from '../features/recovery/composables/useRecoveryPlanCountdown.js'
 import { registerCallScopeTools } from '../features/webmcp/toolRegistry.js'
 
 const store = useLabStore()
@@ -69,7 +70,11 @@ const canDiagnose = computed(() =>
   (state.value === 'critical' && activeFault.value === 'disabled_audio') ||
   (state.value === 'degraded' && activeFault.value === 'constrained_video_bitrate'),
 )
-const approved = computed(() => recoveryPlan.value?.status === 'approved')
+const {
+  expired: recoveryPlanExpired,
+  expiryText: recoveryPlanExpiryText,
+} = useRecoveryPlanCountdown(recoveryPlan)
+const approved = computed(() => recoveryPlan.value?.status === 'approved' && !recoveryPlanExpired.value)
 const diagnosisFinding = computed(() => diagnosis.value?.findings?.[0] ?? null)
 const workflowPhase = computed(() => {
   if (verification.value || incidentReport.value) return 'verify'
@@ -583,14 +588,18 @@ onBeforeUnmount(() => {
             <div class="plan-properties">
               <span>Risk <strong>{{ recoveryPlan.risk }}</strong></span>
               <span>Reversible <strong>{{ recoveryPlan.reversible ? 'yes' : 'no' }}</strong></span>
-              <span>Expires in <strong>90 seconds</strong></span>
+              <span
+                v-if="recoveryPlanExpiryText"
+                data-testid="plan-expiry-countdown"
+                aria-live="polite"
+              >{{ recoveryPlanExpiryText }}</span>
             </div>
             <details class="limitations">
               <summary>Evidence limitations</summary>
               <ul><li v-for="item in diagnosisFinding?.limitations" :key="item">{{ item }}</li></ul>
             </details>
 
-            <div v-if="recoveryPlan.status === 'staged'" class="approval-actions">
+            <div v-if="recoveryPlan.status === 'staged' && !recoveryPlanExpired" class="approval-actions">
               <div class="approval-gate">
                 <span aria-hidden="true">✓</span>
                 <p><strong>Approval records consent only.</strong> The call stays broken until the approved action is applied in a separate step.</p>
