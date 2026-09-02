@@ -23,17 +23,19 @@ export const TOOL_DEFINITIONS = Object.freeze([
   }),
   Object.freeze({
     name: 'inspect_call_state',
-    description: 'Inspect sanitized live peer, ICE, media, sender, receiver, fault, and health state.',
+    description: 'Inspect sanitized live peer, ICE, media, sender, receiver, fault, and health state for the currently active CallScope WebRTC session.',
     inputSchema: Object.freeze({
       type: 'object',
       properties: Object.freeze({
-        session_id: Object.freeze({ type: 'string' }),
+        session_id: Object.freeze({
+          type: 'string',
+          description: 'Optional expected session identifier from a prior structured tool result. Omit it to inspect the currently active browser session.',
+        }),
         detail: Object.freeze({
           type: 'string',
           enum: Object.freeze(['summary', 'media', 'connection', 'all']),
         }),
       }),
-      required: Object.freeze(['session_id']),
       additionalProperties: false,
     }),
     annotations: Object.freeze({ readOnlyHint: true }),

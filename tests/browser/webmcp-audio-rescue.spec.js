@@ -69,6 +69,9 @@ test('completes the real WebMCP audio rescue with separate human approval', asyn
   )
   expect(registrations.map(({ name }) => name)).toEqual(TOOL_NAMES)
   expect(registrations.every(({ active, signalAborted }) => active && !signalAborted)).toBe(true)
+  const inspectionRegistration = registrations.find(({ name }) => name === 'inspect_call_state')
+  expect(inspectionRegistration.inputSchema.required).toBeUndefined()
+  expect(inspectionRegistration.inputSchema.properties.session_id.description).toMatch(/optional/i)
   const diagnosticRegistration = registrations.find(({ name }) => name === 'run_call_diagnostics')
   expect(diagnosticRegistration.inputSchema.required).toEqual(['symptom'])
   expect(diagnosticRegistration.inputSchema.properties.session_id.description).toMatch(/optional/i)
@@ -100,12 +103,10 @@ test('completes the real WebMCP audio rescue with separate human approval', asyn
     suggested_next_tools: ['inspect_call_state', 'run_call_diagnostics'],
   })
 
-  const inspected = await invoke(page, 'inspect_call_state', {
-    session_id: sessionId,
-    detail: 'all',
-  })
+  const inspected = await invoke(page, 'inspect_call_state', { detail: 'all' })
   expect(inspected).toMatchObject({
     ok: true,
+    needed_ids: { session_id: sessionId },
     tracks: { audio: { ready_state: 'live', enabled: false, attached: true } },
     senders: { audio: { attached: true, max_bitrate_bps: null } },
     health: { status: 'critical', score: 55 },
@@ -283,6 +284,21 @@ test('diagnostics without an active session fail without fabricating incident st
   await expect(page.getByTestId('recovery-plan')).toHaveCount(0)
   await expect(page.getByTestId('before-after')).toHaveCount(0)
   await expect(page.getByTestId('incident-report')).toHaveCount(0)
+})
+
+test('inspection without an active session returns the deterministic session error', async ({ page }) => {
+  await installModelContextDouble(page)
+  await page.goto('./')
+
+  const inspected = await invoke(page, 'inspect_call_state', { detail: 'summary' })
+
+  expect(inspected).toMatchObject({
+    ok: false,
+    error: {
+      code: 'NO_ACTIVE_SESSION',
+      message: 'No active lab session is available.',
+    },
+  })
 })
 
 test('replacement sessions are resolved automatically and reject an old plan artifact', async ({ page }) => {

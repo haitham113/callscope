@@ -629,7 +629,9 @@ export function createLabController(store) {
     if (!store.sessionId || ['idle', 'ended'].includes(store.state)) {
       return errorResult('NO_ACTIVE_SESSION')
     }
-    return store.sessionId === sessionId ? { ok: true } : errorResult('SESSION_MISMATCH')
+    return sessionId === undefined || store.sessionId === sessionId
+      ? { ok: true }
+      : errorResult('SESSION_MISMATCH')
   }
 
   function getLabContext() {

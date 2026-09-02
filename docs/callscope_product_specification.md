@@ -402,7 +402,7 @@ Annotations: `readOnlyHint: true`.
 ### 11.2 `inspect_call_state`
 
 **Type:** Read-only  
-**Purpose:** Return a sanitized snapshot of current peer, ICE, media-track, sender, receiver, and fault state.
+**Purpose:** Return a sanitized snapshot of the currently active session's peer, ICE, media-track, sender, receiver, and fault state without requiring a human-supplied session ID.
 
 Input:
 
@@ -410,16 +410,20 @@ Input:
 {
   "type": "object",
   "properties": {
-    "session_id": { "type": "string" },
+    "session_id": {
+      "type": "string",
+      "description": "Optional expected session identifier from a prior structured tool result. Omit it to inspect the currently active browser session."
+    },
     "detail": {
       "type": "string",
       "enum": ["summary", "media", "connection", "all"]
     }
   },
-  "required": ["session_id"],
   "additionalProperties": false
 }
 ```
+
+CallScope resolves the current `session_id` before inspecting state. If the optional expected identifier is supplied, it must match the active session. The response returns the authoritative resolved identifier for later artifact-bound operations.
 
 Output fields:
 

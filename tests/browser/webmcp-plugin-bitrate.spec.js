@@ -100,7 +100,6 @@ test('discovers all tools and runs both rescues through the installed WebMCP Ins
     const audioContext = await invoke('get_lab_context', {})
     expect(audioContext).toMatchObject({ active_fault: 'disabled_audio' })
     expect(await invoke('inspect_call_state', {
-      session_id: audioContext.session_id,
       detail: 'all',
     })).toMatchObject({ tracks: { audio: { enabled: false, ready_state: 'live', attached: true } } })
     const audioDiagnosis = await invoke('run_call_diagnostics', {
@@ -140,7 +139,6 @@ test('discovers all tools and runs both rescues through the installed WebMCP Ins
     const bitrateContext = await invoke('get_lab_context', {})
     expect(bitrateContext).toMatchObject({ active_fault: 'constrained_video_bitrate' })
     expect(await invoke('inspect_call_state', {
-      session_id: bitrateContext.session_id,
       detail: 'all',
     })).toMatchObject({ senders: { video: { max_bitrate_bps: 80_000, bitrate_limited: true } } })
     const bitrateDiagnosis = await invoke('run_call_diagnostics', {

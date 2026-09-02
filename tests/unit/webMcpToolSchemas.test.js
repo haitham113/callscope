@@ -53,4 +53,16 @@ describe('WebMCP tool contracts', () => {
     })
     expect(diagnosticTool.description).not.toMatch(/ask|provide.*session/i)
   })
+
+  it('makes the active browser session the normal inspection context', () => {
+    const inspectionTool = TOOL_DEFINITIONS.find(({ name }) => name === 'inspect_call_state')
+
+    expect(inspectionTool.description).toMatch(/currently active CallScope WebRTC session/i)
+    expect(inspectionTool.inputSchema.required).toBeUndefined()
+    expect(inspectionTool.inputSchema.properties.session_id).toMatchObject({
+      type: 'string',
+      description: expect.stringMatching(/optional/i),
+    })
+    expect(inspectionTool.description).not.toMatch(/ask|provide.*session/i)
+  })
 })

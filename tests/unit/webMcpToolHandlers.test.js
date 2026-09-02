@@ -180,6 +180,23 @@ describe('WebMCP tool handlers', () => {
     })
   })
 
+  it('resolves inspection against the active session when session_id is omitted', async () => {
+    const agent = capabilities()
+    const handlers = createWebMcpToolHandlers(agent)
+
+    const inspected = await handlers.inspect_call_state({ detail: 'all' })
+
+    expect(agent.inspectCallState).toHaveBeenCalledWith({
+      sessionId: undefined,
+      detail: 'all',
+    })
+    expect(inspected).toMatchObject({
+      ok: true,
+      session_id: 'session-1',
+      needed_ids: { session_id: 'session-1' },
+    })
+  })
+
   it('derives context continuation in the adapter without leaking internal workflow facts', async () => {
     const handlers = createWebMcpToolHandlers(capabilities())
 

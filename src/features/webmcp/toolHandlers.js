@@ -156,7 +156,7 @@ export function createWebMcpToolHandlers(agent) {
       if (!result.ok) return result
       return {
         ...result,
-        needed_ids: { session_id },
+        needed_ids: { session_id: result.session_id },
         suggested_next_tools: result.suggested_next_tools ?? suggestedToolsAfter('inspect_call_state'),
       }
     }),

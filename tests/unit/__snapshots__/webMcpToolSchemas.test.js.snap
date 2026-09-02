@@ -30,12 +30,10 @@ exports[`WebMCP tool contracts > preserves the exact input schemas and annotatio
           "type": "string",
         },
         "session_id": {
+          "description": "Optional expected session identifier from a prior structured tool result. Omit it to inspect the currently active browser session.",
           "type": "string",
         },
       },
-      "required": [
-        "session_id",
-      ],
       "type": "object",
     },
     "name": "inspect_call_state",
