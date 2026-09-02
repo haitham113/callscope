@@ -100,7 +100,7 @@ CallScope registers exactly seven focused tools when `document.modelContext.regi
 | --- | --- | --- |
 | `get_lab_context` | Read-only | Returns the active session, health, fault, and recommended next tools. |
 | `inspect_call_state` | Read-only | Returns sanitized peer, ICE, track, sender, receiver, and health state. |
-| `run_call_diagnostics` | Read-only analysis | Samples live statistics and returns ranked, evidence-backed findings. |
+| `run_call_diagnostics` | Read-only analysis | Diagnoses the active browser session from fresh statistics without requiring a human-supplied session ID. |
 | `stage_recovery_plan` | Non-destructive write | Displays a compatible proposed repair for human review. |
 | `apply_recovery_action` | Confirmed state change | Applies one approved, unexpired, allowlisted repair. |
 | `compare_to_failure_baseline` | Read-only verification | Compares the recovered call with the stored failure snapshot. |

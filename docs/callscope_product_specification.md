@@ -369,6 +369,8 @@ All tools must:
 - Never return raw IP addresses, full SDP, credentials, device labels, or secrets.
 - Be registered and cleaned up with an `AbortController` tied to the Vue component/application lifecycle.
 
+For tools that can safely operate on the one active browser session, CallScope resolves the authoritative session internally. An optional `session_id` may be accepted as an advanced expected-session assertion, but normal agent use must not require a human to provide it. Artifact identifiers returned by earlier tools remain explicit, and all runtime session, epoch, fault-revision, snapshot, approval, and lifecycle checks remain authoritative.
+
 ### 11.1 `get_lab_context`
 
 **Type:** Read-only  
@@ -433,7 +435,7 @@ Annotations: `readOnlyHint: true`.
 ### 11.3 `run_call_diagnostics`
 
 **Type:** Read-only analysis  
-**Purpose:** Sample live statistics over a short window, correlate symptoms, and return ranked rule-based findings.
+**Purpose:** Sample live statistics from the currently active browser session over a short window, correlate symptoms, and return ranked rule-based findings.
 
 Input:
 
@@ -441,7 +443,10 @@ Input:
 {
   "type": "object",
   "properties": {
-    "session_id": { "type": "string" },
+    "session_id": {
+      "type": "string",
+      "description": "Optional expected session identifier from a prior structured tool result. Omit it to diagnose the currently active browser session."
+    },
     "symptom": {
       "type": "string",
       "enum": ["silent_audio", "poor_video"],
@@ -454,7 +459,7 @@ Input:
       "default": 2000
     }
   },
-  "required": ["session_id", "symptom"],
+  "required": ["symptom"],
   "additionalProperties": false
 }
 ```
@@ -467,6 +472,8 @@ Output fields:
 - Explicit limitations or unavailable metrics.
 
 Annotations: `readOnlyHint: true`.
+
+CallScope resolves the current `session_id` before sampling. If the optional expected identifier is supplied, it must match the active session. The resulting diagnosis and sampling operation remain bound to the resolved session ID, session epoch, fault revision, snapshot hash, and cancellation signal.
 
 ### 11.4 `stage_recovery_plan`
 

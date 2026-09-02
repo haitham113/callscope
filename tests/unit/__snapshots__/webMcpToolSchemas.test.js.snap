@@ -54,6 +54,7 @@ exports[`WebMCP tool contracts > preserves the exact input schemas and annotatio
           "type": "integer",
         },
         "session_id": {
+          "description": "Optional expected session identifier from a prior structured tool result. Omit it to diagnose the currently active browser session.",
           "type": "string",
         },
         "symptom": {
@@ -66,7 +67,6 @@ exports[`WebMCP tool contracts > preserves the exact input schemas and annotatio
         },
       },
       "required": [
-        "session_id",
         "symptom",
       ],
       "type": "object",

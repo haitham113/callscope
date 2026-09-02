@@ -41,4 +41,16 @@ describe('WebMCP tool contracts', () => {
       description: 'silent_audio diagnoses the disabled outbound audio track; poor_video diagnoses the constrained outbound video bitrate.',
     })
   })
+
+  it('makes the active browser session the normal diagnostics context', () => {
+    const diagnosticTool = TOOL_DEFINITIONS.find(({ name }) => name === 'run_call_diagnostics')
+
+    expect(diagnosticTool.description).toMatch(/currently active CallScope WebRTC session/i)
+    expect(diagnosticTool.inputSchema.required).toEqual(['symptom'])
+    expect(diagnosticTool.inputSchema.properties.session_id).toMatchObject({
+      type: 'string',
+      description: expect.stringMatching(/optional/i),
+    })
+    expect(diagnosticTool.description).not.toMatch(/ask|provide.*session/i)
+  })
 })

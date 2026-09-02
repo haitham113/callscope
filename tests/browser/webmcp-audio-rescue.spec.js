@@ -70,6 +70,8 @@ test('completes the real WebMCP audio rescue with separate human approval', asyn
   expect(registrations.map(({ name }) => name)).toEqual(TOOL_NAMES)
   expect(registrations.every(({ active, signalAborted }) => active && !signalAborted)).toBe(true)
   const diagnosticRegistration = registrations.find(({ name }) => name === 'run_call_diagnostics')
+  expect(diagnosticRegistration.inputSchema.required).toEqual(['symptom'])
+  expect(diagnosticRegistration.inputSchema.properties.session_id.description).toMatch(/optional/i)
   expect(diagnosticRegistration.inputSchema.properties.symptom).toMatchObject({
     enum: ['silent_audio', 'poor_video'],
     description: 'silent_audio diagnoses the disabled outbound audio track; poor_video diagnoses the constrained outbound video bitrate.',
@@ -110,12 +112,12 @@ test('completes the real WebMCP audio rescue with separate human approval', asyn
   })
 
   const diagnosed = await invoke(page, 'run_call_diagnostics', {
-    session_id: sessionId,
     symptom: 'silent_audio',
     sample_duration_ms: 1000,
   })
   expect(diagnosed).toMatchObject({
     ok: true,
+    needed_ids: { session_id: sessionId },
     findings: [{
       code: 'OUTBOUND_AUDIO_TRACK_DISABLED',
       title: 'Outbound audio track is disabled',
@@ -252,6 +254,99 @@ test('completes the real WebMCP audio rescue with separate human approval', asyn
   await expect(page.getByTestId('timeline')).toContainText('User')
   await expect(page.getByTestId('timeline')).toContainText('System')
   expect(errors).toEqual([])
+})
+
+test('diagnostics without an active session fail without fabricating incident state', async ({ page }) => {
+  await installModelContextDouble(page)
+  await page.goto('./')
+
+  const before = await invoke(page, 'get_lab_context')
+  const diagnosed = await invoke(page, 'run_call_diagnostics', {
+    symptom: 'silent_audio',
+    sample_duration_ms: 1000,
+  })
+  const after = await invoke(page, 'get_lab_context')
+
+  expect(diagnosed).toMatchObject({
+    ok: false,
+    error: {
+      code: 'NO_ACTIVE_SESSION',
+      message: 'No active lab session is available.',
+    },
+  })
+  expect(after).toMatchObject({
+    session_id: null,
+    lab_state: before.lab_state,
+    pending_plan_id: null,
+    pending_plan_status: null,
+  })
+  await expect(page.getByTestId('recovery-plan')).toHaveCount(0)
+  await expect(page.getByTestId('before-after')).toHaveCount(0)
+  await expect(page.getByTestId('incident-report')).toHaveCount(0)
+})
+
+test('replacement sessions are resolved automatically and reject an old plan artifact', async ({ page }) => {
+  await installModelContextDouble(page)
+  await page.goto('./')
+
+  await page.getByTestId('start-demo').click()
+  await expect(page.getByTestId('health-status')).toContainText('Healthy', { timeout: 20_000 })
+  await page.getByTestId('break-audio').click()
+  await expect(page.getByTestId('audio-track-status')).toContainText('disabled')
+  await expect(page.getByText('Failure snapshot captured').last()).toBeVisible()
+  const sessionA = (await invoke(page, 'get_lab_context')).session_id
+  const diagnosisA = await invoke(page, 'run_call_diagnostics', {
+    symptom: 'silent_audio',
+    sample_duration_ms: 1000,
+  })
+  const planA = await invoke(page, 'stage_recovery_plan', {
+    session_id: sessionA,
+    diagnosis_id: diagnosisA.diagnosis_id,
+    action: 'enable_audio_track',
+    reason: 'The actual outbound audio track is disabled.',
+    expected_result: 'Restore outbound audio progression.',
+  })
+
+  await page.getByTestId('end-reset').click()
+  await expect(page.getByTestId('health-status')).toContainText('Ended')
+  await page.getByTestId('end-reset').click()
+  await page.getByTestId('start-demo').click()
+  await expect(page.getByTestId('health-status')).toContainText('Healthy', { timeout: 20_000 })
+  await page.getByTestId('break-audio').click()
+  await expect(page.getByTestId('audio-track-status')).toContainText('disabled')
+  await expect(page.getByText('Failure snapshot captured').last()).toBeVisible()
+  const sessionB = (await invoke(page, 'get_lab_context')).session_id
+  expect(sessionB).not.toBe(sessionA)
+
+  const staleSessionAssertion = await invoke(page, 'run_call_diagnostics', {
+    session_id: sessionA,
+    symptom: 'silent_audio',
+    sample_duration_ms: 1000,
+  })
+  expect(staleSessionAssertion).toMatchObject({
+    ok: false,
+    error: { code: 'SESSION_MISMATCH' },
+  })
+  await expect(page.getByTestId('audio-track-status')).toContainText('disabled')
+  await expect(page.getByTestId('recovery-plan')).toHaveCount(0)
+
+  const diagnosisB = await invoke(page, 'run_call_diagnostics', {
+    symptom: 'silent_audio',
+    sample_duration_ms: 1000,
+  })
+  expect(diagnosisB).toMatchObject({
+    ok: true,
+    needed_ids: { session_id: sessionB },
+    findings: [{ code: 'OUTBOUND_AUDIO_TRACK_DISABLED' }],
+  })
+  expect(diagnosisB.needed_ids.session_id).not.toBe(sessionA)
+
+  const stalePlan = await invoke(page, 'apply_recovery_action', {
+    session_id: sessionB,
+    plan_id: planA.plan_id,
+  })
+  expect(stalePlan).toMatchObject({ ok: false, error: { code: 'PLAN_NOT_FOUND' } })
+  await expect(page.getByTestId('audio-track-status')).toContainText('disabled')
 })
 
 test('returns stable schema and session errors without mutating media', async ({ page }) => {

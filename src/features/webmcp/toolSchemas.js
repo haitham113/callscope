@@ -40,11 +40,14 @@ export const TOOL_DEFINITIONS = Object.freeze([
   }),
   Object.freeze({
     name: 'run_call_diagnostics',
-    description: 'Sample a supported deterministic audio or video fault and return ranked findings, real browser evidence, limitations, and compatible recovery actions.',
+    description: 'Diagnose the currently active CallScope WebRTC session using fresh browser evidence and return ranked findings, limitations, and compatible recovery actions.',
     inputSchema: Object.freeze({
       type: 'object',
       properties: Object.freeze({
-        session_id: Object.freeze({ type: 'string' }),
+        session_id: Object.freeze({
+          type: 'string',
+          description: 'Optional expected session identifier from a prior structured tool result. Omit it to diagnose the currently active browser session.',
+        }),
         symptom: Object.freeze({
           type: 'string',
           enum: SUPPORTED_DIAGNOSTIC_SYMPTOMS,
@@ -57,7 +60,7 @@ export const TOOL_DEFINITIONS = Object.freeze([
           default: 2000,
         }),
       }),
-      required: Object.freeze(['session_id', 'symptom']),
+      required: Object.freeze(['symptom']),
       additionalProperties: false,
     }),
     annotations: Object.freeze({ readOnlyHint: true }),

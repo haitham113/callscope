@@ -181,6 +181,7 @@ export function createWebMcpToolHandlers(agent) {
         evidence: finding.evidence,
         allowed_recovery_actions: finding.allowed_actions,
       }))
+      const resolvedSessionId = result.diagnosis.session_id
       return {
         ok: true,
         diagnosis_id: result.diagnosis.id,
@@ -190,7 +191,7 @@ export function createWebMcpToolHandlers(agent) {
           end: result.snapshot.metrics,
         },
         limitations: unique(result.diagnosis.findings.flatMap((finding) => finding.limitations)),
-        needed_ids: { session_id, diagnosis_id: result.diagnosis.id },
+        needed_ids: { session_id: resolvedSessionId, diagnosis_id: result.diagnosis.id },
         suggested_next_tools: suggestedToolsAfter('run_call_diagnostics', {
           hasAllowedActions: result.diagnosis.allowed_actions.length > 0,
         }),

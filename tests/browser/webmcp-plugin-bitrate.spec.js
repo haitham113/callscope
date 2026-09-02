@@ -104,7 +104,6 @@ test('discovers all tools and runs both rescues through the installed WebMCP Ins
       detail: 'all',
     })).toMatchObject({ tracks: { audio: { enabled: false, ready_state: 'live', attached: true } } })
     const audioDiagnosis = await invoke('run_call_diagnostics', {
-      session_id: audioContext.session_id,
       symptom: 'silent_audio',
       sample_duration_ms: 1000,
     })
@@ -145,7 +144,6 @@ test('discovers all tools and runs both rescues through the installed WebMCP Ins
       detail: 'all',
     })).toMatchObject({ senders: { video: { max_bitrate_bps: 80_000, bitrate_limited: true } } })
     const bitrateDiagnosis = await invoke('run_call_diagnostics', {
-      session_id: bitrateContext.session_id,
       symptom: 'poor_video',
       sample_duration_ms: 1000,
     })

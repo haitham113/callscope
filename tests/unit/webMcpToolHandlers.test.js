@@ -33,6 +33,7 @@ function capabilities(overrides = {}) {
       ok: true,
       diagnosis: {
         id: 'diagnosis-1',
+        session_id: 'session-1',
         allowed_actions: ['enable_audio_track'],
         findings: [{
           rank: 1,
@@ -155,6 +156,27 @@ describe('WebMCP tool handlers', () => {
       status: 'staged',
       approval_applies_repair: false,
       suggested_next_tools: ['apply_recovery_action'],
+    })
+  })
+
+  it('resolves diagnostics against the active session when session_id is omitted', async () => {
+    const agent = capabilities()
+    const handlers = createWebMcpToolHandlers(agent)
+
+    const diagnosis = await handlers.run_call_diagnostics({
+      symptom: 'silent_audio',
+      sample_duration_ms: 1000,
+    })
+
+    expect(agent.runDiagnostics).toHaveBeenCalledWith({
+      sessionId: undefined,
+      symptom: 'silent_audio',
+      sampleDurationMs: 1000,
+    })
+    expect(diagnosis).toMatchObject({
+      ok: true,
+      diagnosis_id: 'diagnosis-1',
+      needed_ids: { session_id: 'session-1', diagnosis_id: 'diagnosis-1' },
     })
   })
 
