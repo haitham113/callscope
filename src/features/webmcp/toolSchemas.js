@@ -95,7 +95,7 @@ export const TOOL_DEFINITIONS = Object.freeze([
   }),
   Object.freeze({
     name: 'apply_recovery_action',
-    description: 'Apply one allowlisted repair only after current application-owned human approval.',
+    description: 'Apply one approved allowlisted repair and leave recovery verification pending.',
     inputSchema: Object.freeze({
       type: 'object',
       properties: Object.freeze({
@@ -113,7 +113,7 @@ export const TOOL_DEFINITIONS = Object.freeze([
   }),
   Object.freeze({
     name: 'compare_to_failure_baseline',
-    description: 'Capture fresh stabilized evidence and compare it with the bound failure baseline.',
+    description: 'Authoritatively verify recovery from fresh stabilized evidence and the bound failure baseline.',
     inputSchema: Object.freeze({
       type: 'object',
       properties: Object.freeze({

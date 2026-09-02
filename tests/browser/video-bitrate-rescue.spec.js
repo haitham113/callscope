@@ -46,6 +46,8 @@ test('completes the real manual video-bitrate rescue from sender readback', asyn
   await expect(page.getByTestId('recovery-plan')).toContainText('restore_video_bitrate')
   await page.getByTestId('approve-recovery').click()
   await page.getByTestId('apply-manually').click()
+  await expect(page.getByTestId('health-status')).toContainText('Verification pending')
+  await page.getByTestId('verify-manually').click()
 
   await expect(page.getByTestId('health-status')).toContainText('Healthy', { timeout: 20_000 })
   await expect(page.getByTestId('before-after')).toContainText('sender cap removed')
@@ -80,6 +82,8 @@ test('repeats the real bitrate fault and approved recovery three times', async (
     await page.getByTestId('diagnose-stage').click()
     await page.getByTestId('approve-recovery').click()
     await page.getByTestId('apply-manually').click()
+    await expect(page.getByTestId('health-status')).toContainText('Verification pending')
+    await page.getByTestId('verify-manually').click()
     await expect(page.getByTestId('health-status')).toContainText('Healthy', { timeout: 20_000 })
     await expect(page.getByTestId('video-sender-status')).toContainText('Known-good profile confirmed')
   }

@@ -468,7 +468,11 @@ export function createAudioRescueRuntime({
   function generateIncidentReport({ sessionId = store.sessionId, format = 'summary' } = {}) {
     const session = validateSession(sessionId)
     if (!session.ok) return reject(session, 'Report generation rejected')
-    if (!store.diagnosis || !store.recoveryPlan || !store.verification) return reject(errorResult('VERIFICATION_INCOMPLETE'), 'Report generation rejected')
+    if (
+      !store.diagnosis ||
+      store.recoveryPlan?.status !== 'verified' ||
+      store.verification?.verdict !== 'recovered'
+    ) return reject(errorResult('VERIFICATION_INCOMPLETE'), 'Report generation rejected')
     const report = getOrCreateIncidentReport()
     return success({
       ok: true,
@@ -480,11 +484,10 @@ export function createAudioRescueRuntime({
   async function applyRecoveryAction({
     sessionId = store.sessionId,
     planId,
-    publishReport = true,
   } = {}) {
     const initial = validateActivePlan({ sessionId, planId, snapshotHash: store.recoveryPlan?.snapshot_hash })
     if (!initial.ok) return reject(initial, 'Recovery application rejected')
-    const window = beginWindow('verification', 'Recovery application rejected')
+    const window = beginWindow('recovery', 'Recovery application rejected')
     if (!window.ok) return window
     const { operation } = window
     let mutated = false
@@ -529,39 +532,13 @@ export function createAudioRescueRuntime({
       if (!restored) throw serviceError('RECOVERY_FAILED')
       assertOwned(operation)
       store.markRecoveryApplied(actualBefore, actualAfter)
-
-      let recoveredSnapshot
-      let stabilizationAttempts = 0
-      for (let attempt = 0; attempt < RECOVERY_SAMPLE_ATTEMPTS; attempt += 1) {
-        stabilizationAttempts += 1
-        recoveredSnapshot = await captureOwned(operation, {
-          stabilize: true,
-          phase: 'recovery_verification',
-          sampleDurationMs: DEFAULT_SAMPLE_DURATION_MS,
-        })
-        const retryableVideoProgression = restoringVideo &&
-          recoveredSnapshot.health.status === 'degraded' &&
-          recoveredSnapshot.health.deductions?.length > 0 &&
-          recoveredSnapshot.health.deductions.every(
-            (item) => item.code === 'MEDIA_PROGRESSION_INCOMPLETE',
-          )
-        if (restoringVideo ? !retryableVideoProgression : !canAwaitFreshAudioProgression(recoveredSnapshot)) break
-      }
-      const verification = restoringVideo
-        ? verifyVideoBitrateRecovery({ failureSnapshot: store.failureBaseline, recoveredSnapshot })
-        : verifyDisabledAudioRecovery({ failureSnapshot: store.failureBaseline, recoveredSnapshot })
-      assertOwned(operation)
-      store.completeVerification(verification, recoveredSnapshot)
-      const report = publishReport ? getOrCreateIncidentReport() : null
       return success({
         ok: true,
-        recovered: verification.verdict === 'recovered',
         action: plan.action,
         previous_state: actualBefore,
         new_state: actualAfter,
-        stabilization_wait_ms: stabilizationAttempts * DEFAULT_SAMPLE_DURATION_MS,
-        verification,
-        ...(report ? { report } : {}),
+        stabilization_wait_ms: 0,
+        verification_pending: true,
       })
     } catch (error) {
       const result = failure(error, mutated ? 'VERIFICATION_INCOMPLETE' : 'STATS_UNAVAILABLE')
@@ -602,27 +579,44 @@ export function createAudioRescueRuntime({
     if (plan.fault_revision !== store.faultRevision) {
       return reject(errorResult('DIAGNOSIS_STALE'), 'Verification rejected')
     }
-    if (plan.status !== 'verified' || !store.failureBaseline) {
+    if (plan.status !== 'applied' || !store.failureBaseline) {
       return reject(errorResult('VERIFICATION_INCOMPLETE'), 'Verification rejected')
     }
     const window = beginWindow('verification', 'Verification rejected')
     if (!window.ok) return window
     const { operation } = window
+    store.beginVerification()
     try {
-      const snapshot = await captureOwned(operation, {
-        stabilize: true,
-        phase: 'comparison',
-        sampleDurationMs,
-      })
+      const restoringVideo = plan.action === VIDEO_BITRATE_RECOVERY_ACTION
+      let snapshot
+      for (let attempt = 0; attempt < RECOVERY_SAMPLE_ATTEMPTS; attempt += 1) {
+        snapshot = await captureOwned(operation, {
+          stabilize: true,
+          phase: 'comparison',
+          sampleDurationMs,
+        })
+        const retryableVideoProgression = restoringVideo &&
+          snapshot.health.status === 'degraded' &&
+          snapshot.health.deductions?.length > 0 &&
+          snapshot.health.deductions.every(
+            (item) => item.code === 'MEDIA_PROGRESSION_INCOMPLETE',
+          )
+        if (restoringVideo ? !retryableVideoProgression : !canAwaitFreshAudioProgression(snapshot)) break
+      }
       const verification = plan.action === VIDEO_BITRATE_RECOVERY_ACTION
         ? verifyVideoBitrateRecovery({ failureSnapshot: store.failureBaseline, recoveredSnapshot: snapshot })
         : verifyDisabledAudioRecovery({ failureSnapshot: store.failureBaseline, recoveredSnapshot: snapshot })
       assertOwned(operation)
-      store.refreshVerification(verification, snapshot)
-      return success({ ok: true, verification, snapshot })
+      store.completeVerification(verification, snapshot)
+      return success({
+        ok: true,
+        recovered: verification.verdict === 'recovered',
+        verification,
+        snapshot,
+      })
     } catch (error) {
       const result = failure(error, 'VERIFICATION_INCOMPLETE')
-      if (operations.isCurrent(operation)) store.recordOperationError(result, 'Verification failed')
+      if (operations.isCurrent(operation)) store.failVerification(result)
       return result
     } finally { operations.finish(operation) }
   }

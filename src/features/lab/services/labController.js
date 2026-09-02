@@ -621,6 +621,8 @@ export function createLabController(store) {
     approvePlan: rescueRuntime.approvePlan,
     rejectPlan: rescueRuntime.rejectPlan,
     applyApprovedRecovery: rescueRuntime.applyApprovedRecovery,
+    compareToFailureBaseline: rescueRuntime.compareToFailureBaseline,
+    generateIncidentReport: rescueRuntime.generateIncidentReport,
   })
 
   function activeSessionResult(sessionId) {
@@ -720,7 +722,7 @@ export function createLabController(store) {
     runDiagnostics: rescueRuntime.runAgentDiagnostics,
     stageRecoveryPlan: rescueRuntime.stageAgentRecoveryPlan,
     applyRecoveryAction(input) {
-      return rescueRuntime.applyRecoveryAction({ ...input, publishReport: false })
+      return rescueRuntime.applyRecoveryAction(input)
     },
     compareToFailureBaseline: rescueRuntime.compareToFailureBaseline,
     generateIncidentReport: rescueRuntime.generateIncidentReport,

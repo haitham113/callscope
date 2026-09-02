@@ -8,14 +8,19 @@ export function suggestedToolsForContext({
 }) {
   if (!sessionId || ['idle', 'ended'].includes(state)) return []
   if (planStatus === 'approved') return ['apply_recovery_action']
+  if (planStatus === 'applied') return ['compare_to_failure_baseline']
+  if (planStatus === 'verified') return ['generate_incident_report']
   if (planStatus === 'staged') return []
-  if (hasVerification) return ['compare_to_failure_baseline', 'generate_incident_report']
+  if (hasVerification) return ['compare_to_failure_baseline']
   if (hasDiagnosis) return ['stage_recovery_plan']
   if (activeFault) return ['inspect_call_state', 'run_call_diagnostics']
   return ['inspect_call_state']
 }
 
-export function suggestedToolsAfter(toolName, { hasAllowedActions = false } = {}) {
+export function suggestedToolsAfter(toolName, {
+  hasAllowedActions = false,
+  recovered = true,
+} = {}) {
   const next = {
     inspect_call_state: ['run_call_diagnostics'],
     stage_recovery_plan: ['apply_recovery_action'],
@@ -25,6 +30,9 @@ export function suggestedToolsAfter(toolName, { hasAllowedActions = false } = {}
   }
   if (toolName === 'run_call_diagnostics') {
     return hasAllowedActions ? ['stage_recovery_plan'] : ['inspect_call_state']
+  }
+  if (toolName === 'compare_to_failure_baseline' && !recovered) {
+    return ['compare_to_failure_baseline']
   }
   return next[toolName] ?? []
 }

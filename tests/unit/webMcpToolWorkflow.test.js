@@ -23,6 +23,22 @@ describe('WebMCP conversational workflow policy', () => {
       hasDiagnosis: true,
       activeFault: 'disabled_audio',
     })).toEqual(['apply_recovery_action'])
+    expect(suggestedToolsForContext({
+      sessionId: 'session-1',
+      state: 'verifying',
+      planStatus: 'applied',
+      hasVerification: false,
+      hasDiagnosis: true,
+      activeFault: 'disabled_audio',
+    })).toEqual(['compare_to_failure_baseline'])
+    expect(suggestedToolsForContext({
+      sessionId: 'session-1',
+      state: 'healthy',
+      planStatus: 'verified',
+      hasVerification: true,
+      hasDiagnosis: true,
+      activeFault: null,
+    })).toEqual(['generate_incident_report'])
   })
 
   it('keeps all success and error continuations to at most two registered tools', () => {

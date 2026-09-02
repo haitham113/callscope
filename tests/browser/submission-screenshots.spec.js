@@ -46,8 +46,11 @@ test('captures the four verified submission states from real browser media', asy
   await capture(page, '03-approved-still-broken.png')
 
   await page.getByTestId('apply-manually').click()
+  await expect(page.getByTestId('health-status')).toContainText('Verification pending')
+  await page.getByTestId('verify-manually').click()
   await expect(page.getByTestId('health-status')).toContainText('Healthy', { timeout: 20_000 })
   await expect(page.getByTestId('before-after')).toContainText('recovered')
+  await page.getByTestId('generate-report-manually').click()
   await expect(page.getByTestId('incident-report')).toBeVisible()
   await capture(page, '04-before-after-recovery.png')
 

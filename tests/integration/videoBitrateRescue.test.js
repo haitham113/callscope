@@ -146,9 +146,21 @@ describe('complete constrained-video-bitrate rescue workflow', () => {
     expect(recovery).toMatchObject({
       ok: true,
       action: 'restore_video_bitrate',
-      verification: { verdict: 'recovered' },
+      verification_pending: true,
     })
     expect(video).toMatchObject({ max_bitrate_bps: null, bitrate_limited: false })
+    expect(store).toMatchObject({ state: 'verifying', healthStatus: 'Verification pending' })
+
+    const comparison = await runtime.compareToFailureBaseline({
+      sessionId: store.sessionId,
+      planId: store.recoveryPlan.id,
+      sampleDurationMs: 1000,
+    })
+    expect(comparison).toMatchObject({
+      ok: true,
+      recovered: true,
+      verification: { verdict: 'recovered' },
+    })
     expect(store.state).toBe('healthy')
   })
 
@@ -235,7 +247,13 @@ describe('complete constrained-video-bitrate rescue workflow', () => {
     await runtime.diagnoseAndStageRecovery()
     runtime.approvePlan()
 
-    const result = await runtime.applyApprovedRecovery()
+    const applied = await runtime.applyApprovedRecovery()
+    expect(applied).toMatchObject({ ok: true, verification_pending: true })
+    const result = await runtime.compareToFailureBaseline({
+      sessionId: store.sessionId,
+      planId: store.recoveryPlan.id,
+      sampleDurationMs: 1000,
+    })
 
     expect(result).toMatchObject({
       ok: true,

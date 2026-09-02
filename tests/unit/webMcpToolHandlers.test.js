@@ -63,10 +63,12 @@ function capabilities(overrides = {}) {
       action: 'enable_audio_track',
       previous_state: { ready_state: 'live', enabled: false, attached: true },
       new_state: { ready_state: 'live', enabled: true, attached: true },
-      stabilization_wait_ms: 1150,
+      stabilization_wait_ms: 0,
+      verification_pending: true,
     })),
     compareToFailureBaseline: vi.fn(async () => ({
       ok: true,
+      recovered: true,
       verification: {
         verdict: 'recovered',
         before: { health_status: 'critical', health_score: 55 },
@@ -169,6 +171,61 @@ describe('WebMCP tool handlers', () => {
     })
     expect(context.has_diagnosis).toBeUndefined()
     expect(context.has_verification).toBeUndefined()
+  })
+
+  it('keeps Apply pending and exposes the recovery verdict only from Compare', async () => {
+    const handlers = createWebMcpToolHandlers(capabilities())
+
+    const applied = await handlers.apply_recovery_action({
+      session_id: 'session-1',
+      plan_id: 'plan-1',
+    })
+    expect(applied).toMatchObject({
+      ok: true,
+      applied_action: 'enable_audio_track',
+      verification_pending: true,
+      suggested_next_tools: ['compare_to_failure_baseline'],
+    })
+    expect(applied.verdict).toBeUndefined()
+
+    const compared = await handlers.compare_to_failure_baseline({
+      session_id: 'session-1',
+      plan_id: 'plan-1',
+      sample_duration_ms: 1000,
+    })
+    expect(compared).toMatchObject({
+      ok: true,
+      recovered: true,
+      verdict: 'recovered',
+      suggested_next_tools: ['generate_incident_report'],
+    })
+
+    const unsuccessfulHandlers = createWebMcpToolHandlers(capabilities({
+      compareToFailureBaseline: vi.fn(async () => ({
+        ok: true,
+        recovered: false,
+        verification: {
+          verdict: 'partially_recovered',
+          before: { health_status: 'critical', health_score: 55 },
+          after: { health_status: 'degraded', health_score: 80 },
+          health_score_delta: 25,
+          primary_checks: { fresh_audio_media_progression: false },
+          limitations: [],
+        },
+      })),
+    }))
+    const unsuccessful = await unsuccessfulHandlers.compare_to_failure_baseline({
+      session_id: 'session-1',
+      plan_id: 'plan-1',
+      sample_duration_ms: 1000,
+    })
+    expect(unsuccessful).toMatchObject({
+      ok: true,
+      recovered: false,
+      verdict: 'partially_recovered',
+      suggested_next_tools: ['compare_to_failure_baseline'],
+    })
+    expect(unsuccessful.suggested_next_tools).not.toContain('generate_incident_report')
   })
 
   it('recursively sanitizes all success output including report data', async () => {

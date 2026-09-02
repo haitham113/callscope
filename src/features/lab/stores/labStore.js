@@ -401,7 +401,7 @@ export const useLabStore = defineStore('lab', {
       this.recoveryPlan.status = 'applied'
       this.recoveryPlan.applied_at = new Date().toISOString()
       this.transition('verifying')
-      this.healthStatus = 'Recovering'
+      this.healthStatus = 'Verification pending'
       appendSystemTimeline(
         this,
         'Approved recovery applied',
@@ -411,12 +411,19 @@ export const useLabStore = defineStore('lab', {
         { previous_state: previousState, new_state: newState },
       )
     },
+    beginVerification() {
+      if (this.state !== 'verifying') this.transition('verifying')
+      this.healthStatus = 'Verifying'
+      this.error = null
+    },
     completeVerification(verification, snapshot) {
       this.verification = verification
       this.latestSnapshot = snapshot
-      assertRecoveryTransition(this.recoveryPlan.status, 'verified')
-      this.recoveryPlan.status = 'verified'
-      this.recoveryPlan.verified_at = new Date().toISOString()
+      if (verification.verdict === 'recovered') {
+        assertRecoveryTransition(this.recoveryPlan.status, 'verified')
+        this.recoveryPlan.status = 'verified'
+        this.recoveryPlan.verified_at = new Date().toISOString()
+      }
       const nextState = stateAfterVerification(verification, snapshot)
       this.transition(nextState)
       this.healthStatus = healthStatusLabel(nextState)
@@ -429,17 +436,10 @@ export const useLabStore = defineStore('lab', {
         { verdict: verification.verdict, primary_checks: verification.primary_checks },
       )
     },
-    refreshVerification(verification, snapshot) {
-      this.verification = verification
-      this.latestSnapshot = snapshot
-      const nextState = stateAfterVerification(verification, snapshot)
-      if (this.state !== nextState) {
-        if (this.state !== 'verifying') this.transition('verifying')
-        this.transition(nextState)
-      }
-      this.healthScore = snapshot.health.score
-      this.healthStatus = healthStatusLabel(nextState)
-      this.incidentReport = null
+    failVerification(result) {
+      if (this.state !== 'verifying') this.transition('verifying')
+      this.healthStatus = 'Verification pending'
+      this.recordOperationError(result, 'Verification failed')
     },
     setIncidentReport(report) {
       this.incidentReport = report

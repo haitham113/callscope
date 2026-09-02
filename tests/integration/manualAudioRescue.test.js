@@ -30,17 +30,27 @@ function healthyStore() {
   return store
 }
 
-async function harness({ mutateAudio, failSnapshotAt, stallFirstRecoverySample = false } = {}) {
+async function harness({
+  mutateAudio,
+  failSnapshotAt,
+  stallFirstRecoverySample = false,
+  failRecoveryVerification = false,
+} = {}) {
   const store = healthyStore()
   const audio = { ready_state: 'live', enabled: true, attached: true }
   let sampleRevision = 0
-  async function captureSnapshot() {
+  const sampledPhases = []
+  async function captureSnapshot({ phase } = {}) {
+    sampledPhases.push(phase)
     sampleRevision += 1
     if (sampleRevision === failSnapshotAt) {
       throw new Error('simulated fresh sample failure')
     }
     const enabled = audio.enabled
-    const audioProgressing = !(stallFirstRecoverySample && sampleRevision === 4)
+    const audioProgressing = !(
+      (stallFirstRecoverySample && sampleRevision === 4) ||
+      (failRecoveryVerification && phase === 'comparison')
+    )
     const snapshot = {
       session_id: store.sessionId,
       session_epoch: store.sessionEpoch,
@@ -89,7 +99,7 @@ async function harness({ mutateAudio, failSnapshotAt, stallFirstRecoverySample =
     },
     now: () => 10_000,
   })
-  return { store, audio, runtime }
+  return { store, audio, runtime, sampledPhases }
 }
 
 describe('complete manual disabled-audio rescue workflow', () => {
@@ -126,6 +136,14 @@ describe('complete manual disabled-audio rescue workflow', () => {
     const recovery = await runtime.applyApprovedRecovery(store.recoveryPlan.id)
     expect(recovery.ok).toBe(true)
     expect(audio.enabled).toBe(true)
+    expect(store.verification).toBeNull()
+
+    const comparison = await runtime.compareToFailureBaseline({
+      sessionId: store.sessionId,
+      planId: store.recoveryPlan.id,
+      sampleDurationMs: 1000,
+    })
+    expect(comparison.ok).toBe(true)
     expect(store.verification).toMatchObject({
       verdict: 'recovered',
       primary_checks: {
@@ -135,12 +153,12 @@ describe('complete manual disabled-audio rescue workflow', () => {
         fresh_audio_media_progression: true,
       },
     })
-    expect(store.incidentReport.root_cause).toBe('Outbound audio track is disabled')
+    expect(store.incidentReport).toBeNull()
     expect(store.state).toBe('healthy')
   })
 
   it('keeps WebMCP application, fresh comparison, and report generation explicitly sequenced', async () => {
-    const { store, audio, runtime } = await harness()
+    const { store, audio, runtime, sampledPhases } = await harness()
     await runtime.breakAudioTrack()
     const diagnosis = await runtime.runAgentDiagnostics({
       sessionId: store.sessionId,
@@ -158,7 +176,6 @@ describe('complete manual disabled-audio rescue workflow', () => {
     expect((await runtime.applyRecoveryAction({
       sessionId: store.sessionId,
       planId: staged.plan.id,
-      publishReport: false,
     })).error.code).toBe('PLAN_NOT_APPROVED')
     expect(audio.enabled).toBe(false)
 
@@ -167,14 +184,32 @@ describe('complete manual disabled-audio rescue workflow', () => {
     const applied = await runtime.applyRecoveryAction({
       sessionId: store.sessionId,
       planId: staged.plan.id,
-      publishReport: false,
     })
     expect(applied).toMatchObject({
       ok: true,
       action: 'enable_audio_track',
-      stabilization_wait_ms: 1150,
+      stabilization_wait_ms: 0,
+      verification_pending: true,
     })
+    expect(audio.enabled).toBe(true)
+    expect(store.recoveryPlan).toMatchObject({ status: 'applied', verified_at: null })
+    expect(store.state).toBe('verifying')
+    expect(store.healthStatus).toBe('Verification pending')
+    expect(store.verification).toBeNull()
     expect(store.incidentReport).toBeNull()
+    expect(store.timeline.map((event) => event.title)).not.toContain('Recovery verification completed')
+    expect(sampledPhases).not.toContain('recovery_verification')
+
+    expect(runtime.generateIncidentReport({
+      sessionId: store.sessionId,
+      format: 'summary',
+    })).toMatchObject({
+      ok: false,
+      error: {
+        code: 'VERIFICATION_INCOMPLETE',
+        message: 'Recovery verification has not been completed successfully.',
+      },
+    })
 
     const compared = await runtime.compareToFailureBaseline({
       sessionId: store.sessionId,
@@ -182,6 +217,9 @@ describe('complete manual disabled-audio rescue workflow', () => {
       sampleDurationMs: 1000,
     })
     expect(compared).toMatchObject({ ok: true, verification: { verdict: 'recovered' } })
+    expect(sampledPhases).toContain('comparison')
+    expect(store.recoveryPlan.status).toBe('verified')
+    expect(store.timeline.map((event) => event.title)).toContain('Recovery verification completed')
     expect(store.incidentReport).toBeNull()
 
     const report = runtime.generateIncidentReport({
@@ -246,21 +284,28 @@ describe('complete manual disabled-audio rescue workflow', () => {
     expect(store.recoveryPlan.status).toBe('approved')
   })
 
-  it('returns to Critical with an unverified applied plan when fresh sampling fails', async () => {
+  it('returns to Critical with an unverified applied plan when fresh comparison sampling fails', async () => {
     const { store, audio, runtime } = await harness({ failSnapshotAt: 4 })
     await runtime.breakAudioTrack()
     await runtime.diagnoseAndStageRecovery()
     runtime.approvePlan()
 
-    const result = await runtime.applyApprovedRecovery(store.recoveryPlan.id)
+    const applied = await runtime.applyApprovedRecovery(store.recoveryPlan.id)
+    expect(applied).toMatchObject({ ok: true, verification_pending: true })
+
+    const result = await runtime.compareToFailureBaseline({
+      sessionId: store.sessionId,
+      planId: store.recoveryPlan.id,
+      sampleDurationMs: 1000,
+    })
 
     expect(result).toMatchObject({
       ok: false,
       error: { code: 'VERIFICATION_INCOMPLETE', recoverable: true },
     })
     expect(audio.enabled).toBe(true)
-    expect(store.state).toBe('critical')
-    expect(store.healthStatus).toBe('Critical')
+    expect(store.state).toBe('verifying')
+    expect(store.healthStatus).toBe('Verification pending')
     expect(store.recoveryPlan.status).toBe('applied')
     expect(store.verification).toBeNull()
     expect(store.incidentReport).toBeNull()
@@ -272,7 +317,13 @@ describe('complete manual disabled-audio rescue workflow', () => {
     await runtime.diagnoseAndStageRecovery()
     runtime.approvePlan()
 
-    const result = await runtime.applyApprovedRecovery(store.recoveryPlan.id)
+    const applied = await runtime.applyApprovedRecovery(store.recoveryPlan.id)
+    expect(applied).toMatchObject({ ok: true, verification_pending: true })
+    const result = await runtime.compareToFailureBaseline({
+      sessionId: store.sessionId,
+      planId: store.recoveryPlan.id,
+      sampleDurationMs: 1000,
+    })
 
     expect(result.ok).toBe(true)
     expect(result.verification).toMatchObject({
@@ -280,5 +331,34 @@ describe('complete manual disabled-audio rescue workflow', () => {
       primary_checks: { fresh_audio_media_progression: true },
     })
     expect(store.state).toBe('healthy')
+  })
+
+  it('keeps a successfully applied action unverified when comparison does not prove recovery', async () => {
+    const { store, audio, runtime } = await harness({ failRecoveryVerification: true })
+    await runtime.breakAudioTrack()
+    await runtime.diagnoseAndStageRecovery()
+    runtime.approvePlan()
+
+    const applied = await runtime.applyApprovedRecovery(store.recoveryPlan.id)
+    expect(applied).toMatchObject({ ok: true, verification_pending: true })
+    expect(audio.enabled).toBe(true)
+
+    const compared = await runtime.compareToFailureBaseline({
+      sessionId: store.sessionId,
+      planId: store.recoveryPlan.id,
+      sampleDurationMs: 1000,
+    })
+
+    expect(compared).toMatchObject({
+      ok: true,
+      recovered: false,
+      verification: { verdict: 'partially_recovered' },
+    })
+    expect(store.recoveryPlan).toMatchObject({ status: 'applied', verified_at: null })
+    expect(store).toMatchObject({ state: 'degraded', healthStatus: 'Degraded' })
+    expect(runtime.generateIncidentReport({ sessionId: store.sessionId })).toMatchObject({
+      ok: false,
+      error: { code: 'VERIFICATION_INCOMPLETE' },
+    })
   })
 })

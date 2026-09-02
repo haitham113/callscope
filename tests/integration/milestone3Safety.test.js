@@ -447,18 +447,28 @@ describe('Milestone 3 safety integration', () => {
     expect(subject.store.timeline).toHaveLength(timelineLength)
   })
 
-  it.each(['recovery_preflight', 'recovery_verification'])('reset cancels %s with no late state mutation', async (phase) => {
+  it.each(['recovery_preflight', 'comparison'])('reset cancels %s with no late state mutation', async (phase) => {
     const subject = await harness({ blockedPhases: [phase], ignoreAbortPhases: [phase] })
     await subject.runtime.breakAudioTrack()
     await subject.runtime.diagnoseAndStageRecovery()
     subject.runtime.approvePlan()
-    const application = subject.runtime.applyApprovedRecovery(subject.store.recoveryPlan.id)
+    let pendingOperation
+    if (phase === 'recovery_preflight') {
+      pendingOperation = subject.runtime.applyApprovedRecovery(subject.store.recoveryPlan.id)
+    } else {
+      await subject.runtime.applyApprovedRecovery(subject.store.recoveryPlan.id)
+      pendingOperation = subject.runtime.compareToFailureBaseline({
+        sessionId: subject.store.sessionId,
+        planId: subject.store.recoveryPlan.id,
+        sampleDurationMs: 1000,
+      })
+    }
     await subject.enter(phase)
     const reset = await subject.runtime.resetScenario()
     expect(reset.ok).toBe(true)
     const timelineLength = subject.store.timeline.length
     subject.release(phase)
-    expect((await application).error.code).toBe('OPERATION_CANCELLED')
+    expect((await pendingOperation).error.code).toBe('OPERATION_CANCELLED')
     expect(subject.store.state).toBe('healthy')
     expect(subject.audio.enabled).toBe(true)
     expect(subject.store.recoveryPlan).toBeNull()
@@ -471,6 +481,11 @@ describe('Milestone 3 safety integration', () => {
     await subject.runtime.diagnoseAndStageRecovery()
     subject.runtime.approvePlan()
     await subject.runtime.applyApprovedRecovery(subject.store.recoveryPlan.id)
+    await subject.runtime.compareToFailureBaseline({
+      sessionId: subject.store.sessionId,
+      planId: subject.store.recoveryPlan.id,
+      sampleDurationMs: 1000,
+    })
     const first = subject.runtime.generateIncidentReport({ sessionId: subject.store.sessionId })
     const revision = subject.store.incidentRevision
     subject.store.recordInspectionEvent('State inspected', 'Read-only evidence inspected.')
@@ -482,11 +497,16 @@ describe('Milestone 3 safety integration', () => {
   })
 
   it('uses success plus an explicit verdict for a completed partial verification', async () => {
-    const subject = await harness({ unhealthyPhases: ['recovery_verification'] })
+    const subject = await harness({ unhealthyPhases: ['comparison'] })
     await subject.runtime.breakAudioTrack()
     await subject.runtime.diagnoseAndStageRecovery()
     subject.runtime.approvePlan()
-    const result = await subject.runtime.applyApprovedRecovery(subject.store.recoveryPlan.id)
+    await subject.runtime.applyApprovedRecovery(subject.store.recoveryPlan.id)
+    const result = await subject.runtime.compareToFailureBaseline({
+      sessionId: subject.store.sessionId,
+      planId: subject.store.recoveryPlan.id,
+      sampleDurationMs: 1000,
+    })
 
     expect(result).toMatchObject({
       ok: true,

@@ -238,6 +238,7 @@ export function createWebMcpToolHandlers(agent) {
         previous_state: result.previous_state,
         new_state: result.new_state,
         stabilization_wait_ms: result.stabilization_wait_ms,
+        verification_pending: result.verification_pending,
         limitations: ['Successful mutation alone is not proof of recovery; compare fresh evidence next.'],
         needed_ids: { session_id, plan_id },
         suggested_next_tools: suggestedToolsAfter('apply_recovery_action'),
@@ -260,6 +261,7 @@ export function createWebMcpToolHandlers(agent) {
         ok: true,
         session_id,
         plan_id,
+        recovered: result.recovered,
         before: verification.before,
         after: verification.after,
         health_score_delta: verification.health_score_delta,
@@ -274,7 +276,9 @@ export function createWebMcpToolHandlers(agent) {
           .map(([check]) => check),
         limitations: verification.limitations,
         needed_ids: { session_id, plan_id },
-        suggested_next_tools: suggestedToolsAfter('compare_to_failure_baseline'),
+        suggested_next_tools: suggestedToolsAfter('compare_to_failure_baseline', {
+          recovered: result.recovered,
+        }),
       }
     }),
 

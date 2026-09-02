@@ -73,7 +73,8 @@ const approved = computed(() => recoveryPlan.value?.status === 'approved')
 const diagnosisFinding = computed(() => diagnosis.value?.findings?.[0] ?? null)
 const workflowPhase = computed(() => {
   if (verification.value || incidentReport.value) return 'verify'
-  if (['recovering', 'verifying'].includes(state.value)) return 'recover'
+  if (state.value === 'verifying') return 'verify'
+  if (state.value === 'recovering') return 'recover'
   if (recoveryPlan.value?.status === 'approved') return 'continue'
   if (recoveryPlan.value?.status === 'staged' || state.value === 'awaiting_approval') return 'approve'
   if (activeFault.value || state.value === 'diagnosing') return 'diagnose'
@@ -185,6 +186,17 @@ function rejectRecovery() {
 
 function applyManually() {
   return runOperation(() => human.applyApprovedRecovery())
+}
+
+function verifyManually() {
+  return runOperation(() => human.compareToFailureBaseline({
+    sessionId: sessionId.value,
+    planId: recoveryPlan.value?.id,
+  }))
+}
+
+function generateReportManually() {
+  return runOperation(() => human.generateIncidentReport({ sessionId: sessionId.value }))
 }
 
 function evidenceLabel(value) {
@@ -594,9 +606,27 @@ onBeforeUnmount(() => {
               <div class="manual-fallback" data-testid="manual-fallback">
                 <span>No agent available?</span>
                 <button class="manual-apply-button" type="button" data-testid="apply-manually" :disabled="operationPending" @click="applyManually">
-                  {{ operationPending ? 'Applying and verifying…' : 'Apply manually' }}
+                  {{ operationPending ? 'Applying…' : 'Apply manually' }}
                 </button>
               </div>
+            </div>
+
+            <div v-if="recoveryPlan.status === 'applied'" class="approved-state" data-testid="applied-instruction">
+              <span class="approval-recorded">✓ Approved action applied</span>
+              <strong v-if="!verification">Recovery action applied. Verification is still pending.</strong>
+              <strong v-else>Verification result: {{ verification.verdict.replaceAll('_', ' ') }}. The report remains locked.</strong>
+              <p>Run a fresh comparison against the recorded failure baseline before reporting recovery.</p>
+              <button class="primary-button" type="button" data-testid="verify-manually" :disabled="operationPending" @click="verifyManually">
+                {{ operationPending ? 'Comparing fresh evidence…' : verification ? 'Verify again' : 'Verify recovery' }}
+              </button>
+            </div>
+
+            <div v-if="recoveryPlan.status === 'verified'" class="approved-state" data-testid="verified-instruction">
+              <span class="approval-recorded">✓ Recovery verified</span>
+              <strong>Fresh before/after evidence proved recovery.</strong>
+              <button v-if="!incidentReport" class="primary-button" type="button" data-testid="generate-report-manually" :disabled="operationPending" @click="generateReportManually">
+                {{ operationPending ? 'Generating report…' : 'Generate incident report' }}
+              </button>
             </div>
           </div>
         </article>

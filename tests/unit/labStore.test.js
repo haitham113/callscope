@@ -154,12 +154,14 @@ describe('lab store session reset', () => {
     })
   })
 
-  it('keeps canonical state and health status aligned when verification is refreshed', () => {
+  it('keeps canonical state and health status aligned when verification completes', () => {
     const store = useLabStore()
     store.beginSession()
     store.markHealthy({ captured_at: 'synthetic' })
+    store.recoveryPlan = { status: 'applied', verified_at: null }
+    store.transition('verifying')
 
-    store.refreshVerification(
+    store.completeVerification(
       { verdict: 'partially_recovered' },
       { health: { score: 75 } },
     )
@@ -169,7 +171,8 @@ describe('lab store session reset', () => {
       healthScore: 75,
     })
 
-    store.refreshVerification(
+    store.beginVerification()
+    store.completeVerification(
       { verdict: 'not_recovered' },
       { health: { score: 40 } },
     )
@@ -184,8 +187,10 @@ describe('lab store session reset', () => {
     const store = useLabStore()
     store.beginSession()
     store.markHealthy({ captured_at: 'synthetic' })
+    store.recoveryPlan = { status: 'applied', verified_at: null }
+    store.transition('verifying')
 
-    store.refreshVerification(
+    store.completeVerification(
       { verdict: 'recovered' },
       { health: { status: 'degraded', score: 80 } },
     )

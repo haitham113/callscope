@@ -185,7 +185,7 @@ test('scenario reset cancels a real diagnostic window without a late plan', asyn
   expect(errors).toEqual([])
 })
 
-test('scenario reset cancels real recovery verification with no late report', async ({ page }) => {
+test('scenario reset clears an applied recovery while verification is pending', async ({ page }) => {
   const errors = collectBrowserErrors(page)
   await page.goto('./')
   await startHealthy(page)
@@ -193,8 +193,8 @@ test('scenario reset cancels real recovery verification with no late report', as
   await stage(page)
   await page.getByTestId('approve-recovery').click()
 
-  await page.getByTestId('apply-manually').click({ noWaitAfter: true })
-  await expect(page.getByTestId('health-status')).toContainText('Recovering')
+  await page.getByTestId('apply-manually').click()
+  await expect(page.getByTestId('health-status')).toContainText('Verification pending')
   await page.getByTestId('reset-scenario').click()
   await expect(page.getByTestId('health-status')).toContainText('Healthy')
   await page.waitForTimeout(1500)
@@ -220,8 +220,10 @@ test('end cancels diagnosis and verification without late mutation of a restarte
   await fault(page)
   await stage(page)
   await page.getByTestId('approve-recovery').click()
-  await page.getByTestId('apply-manually').click({ noWaitAfter: true })
-  await expect(page.getByTestId('health-status')).toContainText('Recovering')
+  await page.getByTestId('apply-manually').click()
+  await expect(page.getByTestId('health-status')).toContainText('Verification pending')
+  await page.getByTestId('verify-manually').click({ noWaitAfter: true })
+  await expect(page.getByTestId('health-status')).toContainText('Verifying')
   await page.getByTestId('end-reset').click()
   await expect(page.getByTestId('health-status')).toContainText('Ended')
   await page.waitForTimeout(1500)

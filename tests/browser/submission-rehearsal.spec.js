@@ -26,8 +26,11 @@ test('records three repeatable judge-path rehearsal times without browser errors
     await page.getByTestId('approve-recovery').click()
     await expect(page.getByTestId('audio-track-status')).toContainText('disabled')
     await page.getByTestId('apply-manually').click()
+    await expect(page.getByTestId('health-status')).toContainText('Verification pending')
+    await page.getByTestId('verify-manually').click()
     await expect(page.getByTestId('health-status')).toContainText('Healthy', { timeout: 20_000 })
     await expect(page.getByTestId('before-after')).toContainText('recovered')
+    await page.getByTestId('generate-report-manually').click()
     await expect(reportEvents).toHaveCount(reportCount + 1)
 
     recoveryTimesMs.push(Date.now() - cycleBeganAt)

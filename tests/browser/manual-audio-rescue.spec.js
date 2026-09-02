@@ -46,7 +46,18 @@ async function approveAndApply(page) {
     'Approved. Apply the repair, verify recovery, and generate the report.',
   )
   await expect(page.getByTestId('audio-track-status')).toContainText('disabled')
+  const completedVerificationEvents = page.getByText('Recovery verification completed')
+  const verificationEventCount = await completedVerificationEvents.count()
   await page.getByTestId('apply-manually').click()
+  await expect(page.getByTestId('health-status')).toContainText('Verification pending')
+  await expect(page.getByTestId('applied-instruction')).toContainText(
+    'Recovery action applied. Verification is still pending.',
+  )
+  await expect(page.getByTestId('before-after')).toHaveCount(0)
+  await expect(completedVerificationEvents).toHaveCount(verificationEventCount)
+  await expect(page.getByTestId('incident-report')).toHaveCount(0)
+  await page.getByTestId('verify-manually').click()
+  await expect(completedVerificationEvents).toHaveCount(verificationEventCount + 1)
   await expect(page.getByTestId('before-after').locator('.verdict')).toHaveText('recovered', {
     timeout: 12_000,
   })
@@ -58,6 +69,7 @@ async function approveAndApply(page) {
   await expect(page.getByTestId('before-after')).toContainText('Audio enabled: false')
   await expect(page.getByTestId('before-after')).toContainText('Audio enabled: true')
   await expect(page.getByTestId('before-after')).toContainText('Fresh audio progression: confirmed')
+  await page.getByTestId('generate-report-manually').click()
   await expect(page.getByTestId('incident-report')).toContainText('Outbound audio track is disabled')
   await expect(page.getByTestId('incident-report')).toContainText(
     'raw IP addresses, SDP, and device labels excluded',

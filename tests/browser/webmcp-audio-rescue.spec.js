@@ -170,9 +170,16 @@ test('completes the real WebMCP audio rescue with separate human approval', asyn
     applied_action: 'enable_audio_track',
     previous_state: { enabled: false },
     new_state: { enabled: true },
+    verification_pending: true,
     suggested_next_tools: ['compare_to_failure_baseline'],
   })
   await expect(page.getByTestId('audio-track-status')).toContainText('enabled')
+  await expect(page.getByTestId('health-status')).toContainText('Verification pending')
+  await expect(page.getByTestId('applied-instruction')).toContainText(
+    'Recovery action applied. Verification is still pending.',
+  )
+  await expect(page.getByTestId('before-after')).toHaveCount(0)
+  await expect(page.getByText('Recovery verification completed')).toHaveCount(0)
   await expect(page.getByTestId('incident-report')).toHaveCount(0)
 
   const compared = await invoke(page, 'compare_to_failure_baseline', {
@@ -218,6 +225,24 @@ test('completes the real WebMCP audio rescue with separate human approval', asyn
 
   const timelineToolNames = await page.locator('[data-testid="timeline"] h3').allTextContents()
   for (const toolName of TOOL_NAMES) expect(timelineToolNames).toContain(toolName)
+  const chronologicalTimeline = (await page.locator('[data-testid="timeline"] li').allTextContents()).reverse()
+  const heroOrder = [
+    'run_call_diagnostics',
+    'stage_recovery_plan',
+    'Recovery approved',
+    'apply_recovery_action',
+    'compare_to_failure_baseline',
+    'generate_incident_report',
+  ]
+  let previousHeroIndex = -1
+  const heroIndexes = heroOrder.map((title) => {
+    previousHeroIndex = chronologicalTimeline.findIndex(
+      (event, index) => index > previousHeroIndex && event.includes(title),
+    )
+    return previousHeroIndex
+  })
+  expect(heroIndexes.every((index) => index >= 0)).toBe(true)
+  expect(heroIndexes).toEqual([...heroIndexes].sort((left, right) => left - right))
   await expect(page.getByTestId('timeline')).toContainText('Agent')
   await expect(page.getByTestId('timeline')).toContainText('User')
   await expect(page.getByTestId('timeline')).toContainText('System')

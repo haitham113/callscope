@@ -73,7 +73,9 @@ for (const viewport of [
       await page.getByTestId('approve-recovery').click()
       await expect(page.getByTestId('approved-instruction')).toBeVisible()
       await page.getByTestId('apply-manually').click()
+      await page.getByTestId('verify-manually').click()
       await expect(page.getByTestId('before-after').locator('.verdict')).toHaveText('recovered')
+      await page.getByTestId('generate-report-manually').click()
       await expect(page.getByTestId('incident-report')).toBeVisible()
       const recoveredDimensions = await page.evaluate(() => ({
         clientWidth: document.documentElement.clientWidth,
@@ -172,6 +174,9 @@ test('keeps visible judge-facing text above WCAG AA contrast across workflow sta
   await expect(page.getByTestId('approved-instruction')).toBeVisible()
   await auditVisibleText('approved')
   await page.getByTestId('apply-manually').click()
+  await expect(page.getByTestId('applied-instruction')).toBeVisible()
+  await auditVisibleText('applied')
+  await page.getByTestId('verify-manually').click()
   await expect(page.getByTestId('before-after').locator('.verdict')).toHaveText('recovered')
   await auditVisibleText('recovered')
 })

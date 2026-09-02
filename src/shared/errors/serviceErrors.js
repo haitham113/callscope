@@ -14,7 +14,7 @@ export const ERROR_DEFINITIONS = Object.freeze({
   PLAN_EXPIRED: Object.freeze({ message: 'The recovery plan has expired.', recoverable: true, suggested_next_step: 'Capture a fresh diagnosis and stage a new plan.' }),
   PLAN_ALREADY_USED: Object.freeze({ message: 'This recovery plan has already been used.', recoverable: true, suggested_next_step: 'Diagnose the current state again if another repair is needed.' }),
   RECOVERY_FAILED: Object.freeze({ message: 'The approved recovery could not be applied safely.', recoverable: false, suggested_next_step: 'Reset the scenario or restart the lab.' }),
-  VERIFICATION_INCOMPLETE: Object.freeze({ message: 'Fresh authoritative verification did not complete.', recoverable: true, suggested_next_step: 'Reset the scenario or restart the lab before another recovery.' }),
+  VERIFICATION_INCOMPLETE: Object.freeze({ message: 'Recovery verification has not been completed successfully.', recoverable: true, suggested_next_step: 'Retry verification or reset the lab based on the active workflow.' }),
   DIAGNOSIS_NOT_FOUND: Object.freeze({ message: 'The requested diagnosis was not found.', recoverable: true, suggested_next_step: 'Run diagnostics again and use the returned diagnosis identifier.' }),
   PLAN_NOT_FOUND: Object.freeze({ message: 'The requested recovery plan was not found.', recoverable: true, suggested_next_step: 'Stage a compatible recovery plan first.' }),
   MEDIA_CAPABILITY_UNSUPPORTED: Object.freeze({ message: 'A required browser media capability is unavailable.', recoverable: false, suggested_next_step: 'Open CallScope in a supported Chromium browser.' }),
