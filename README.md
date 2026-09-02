@@ -331,7 +331,7 @@ Browser statistics vary. CallScope treats authoritative track and sender state a
 - Visible video degradation is browser-dependent; sender-parameter readback, not appearance, proves the configured cap and restoration.
 - Incident reports render on screen and can be returned as Markdown through WebMCP; file download and PDF export are intentionally not implemented.
 - Active state is in memory. Reloading intentionally resets the incident instead of persisting it.
-- The public Milestone 6 deployment passed the complete 31-test deployed Chrome suite on 2026-09-01. A broader follow-up contrast audit found one active workflow caption at 3.92:1; the local correction is verified and awaits deployment. Consult [the Milestone 6 validation record](docs/callscope_milestone6_validation.md) for current evidence and remaining gates.
+- The public Milestone 6 deployment passed the complete 31-test deployed Chrome suite on 2026-09-01. A broader follow-up contrast audit found one active workflow caption at 3.92:1; the correction was subsequently deployed and passed the final five-state contrast validation. Consult [the Milestone 6 validation record](docs/callscope_milestone6_validation.md) for current evidence and remaining gates.
 
 ## Privacy
 
