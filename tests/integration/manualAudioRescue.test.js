@@ -113,6 +113,12 @@ describe('complete manual disabled-audio rescue workflow', () => {
 
     const staged = await runtime.diagnoseAndStageRecovery()
     expect(staged).toMatchObject({ ok: true })
+    const diagnosisCopy = store.timeline
+      .filter((event) => /diagnos|sampling/i.test(`${event.title} ${event.detail}`))
+      .map((event) => `${event.title} ${event.detail}`)
+      .join(' ')
+    expect(diagnosisCopy).toMatch(/disabled[- ]audio|audio track.*disabled/i)
+    expect(diagnosisCopy).not.toMatch(/constrained[- ]video[- ]bitrate|video bitrate cap/i)
     expect(store.diagnosis).toMatchObject({
       session_id: store.sessionId,
       session_epoch: store.sessionEpoch,
@@ -237,6 +243,9 @@ describe('complete manual disabled-audio rescue workflow', () => {
     await runtime.diagnoseAndStageRecovery()
     expect(runtime.rejectPlan()).toMatchObject({ ok: true, status: 'rejected' })
     expect(audio.enabled).toBe(false)
+    const rejection = store.timeline.findLast((event) => event.title === 'Recovery rejected')
+    expect(rejection?.detail).toMatch(/audio track.*remains disabled/i)
+    expect(rejection?.detail).not.toMatch(/video|bitrate/i)
     const rejectedApply = await runtime.applyApprovedRecovery(store.recoveryPlan.id)
     expect(rejectedApply.error.code).toBe('PLAN_NOT_APPROVED')
     expect(audio.enabled).toBe(false)

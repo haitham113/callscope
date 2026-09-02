@@ -35,6 +35,39 @@ function invoke(page, name, input = {}) {
   )
 }
 
+function latestTimelineEvent(page, title) {
+  return page.getByTestId('timeline').locator('li').filter({ hasText: title }).first()
+}
+
+test('keeps diagnosis and rejected-recovery timeline copy isolated by scenario', async ({ page }) => {
+  await startHealthy(page)
+
+  await page.getByTestId('break-audio').click()
+  await expect(page.getByTestId('health-status')).toContainText('Critical')
+  await page.getByTestId('diagnose-stage').click()
+  const audioDiagnosis = latestTimelineEvent(page, 'Manual diagnosis requested')
+  await expect(audioDiagnosis).toContainText('active disabled-audio fault')
+  await expect(audioDiagnosis).not.toContainText('video-bitrate')
+  await page.getByTestId('reject-recovery').click()
+  const audioRejection = latestTimelineEvent(page, 'Recovery rejected')
+  await expect(audioRejection).toContainText('outbound audio track remains disabled')
+  await expect(audioRejection).not.toContainText('video bitrate')
+
+  await page.getByTestId('reset-scenario').click()
+  await expect(page.getByTestId('health-status')).toContainText('Healthy', { timeout: 20_000 })
+  await page.getByTestId('break-video-bitrate').click()
+  await expect(page.getByTestId('health-status')).toContainText('Degraded')
+  await page.getByTestId('diagnose-stage').click()
+  const videoDiagnosis = latestTimelineEvent(page, 'Manual diagnosis requested')
+  await expect(videoDiagnosis).toContainText('active constrained-video-bitrate fault')
+  await expect(videoDiagnosis).not.toContainText('disabled-audio')
+  await page.getByTestId('reject-recovery').click()
+  const videoRejection = latestTimelineEvent(page, 'Recovery rejected')
+  await expect(videoRejection).toContainText('outbound video bitrate cap remains active')
+  await expect(videoRejection).not.toContainText('audio track')
+  await expect(videoRejection).not.toContainText('media track remains disabled')
+})
+
 test('completes the real manual video-bitrate rescue from sender readback', async ({ page }) => {
   await startHealthy(page)
 

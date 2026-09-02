@@ -120,6 +120,35 @@ async function harness({
 describe('complete constrained-video-bitrate rescue workflow', () => {
   beforeEach(() => setActivePinia(createPinia()))
 
+  it('uses video-specific timeline copy while diagnosing the bitrate fault', async () => {
+    const { store, runtime } = await harness()
+
+    await runtime.breakVideoBitrate()
+    await runtime.diagnoseAndStageRecovery()
+
+    const diagnosisEvents = store.timeline.filter((event) =>
+      ['diagnosis_requested', 'state_changed'].includes(event.type) &&
+      /diagnos|sampling/i.test(`${event.title} ${event.detail}`),
+    )
+    const copy = diagnosisEvents.map((event) => `${event.title} ${event.detail}`).join(' ')
+
+    expect(copy).toMatch(/video.*bitrate|bitrate.*video/i)
+    expect(copy).not.toMatch(/disabled[- ]audio|audio track.*disabled/i)
+  })
+
+  it('describes the unchanged bitrate cap when video recovery is rejected', async () => {
+    const { store, runtime, video } = await harness()
+
+    await runtime.breakVideoBitrate()
+    await runtime.diagnoseAndStageRecovery()
+    runtime.rejectPlan()
+
+    const rejection = store.timeline.findLast((event) => event.title === 'Recovery rejected')
+    expect(video.bitrate_limited).toBe(true)
+    expect(rejection?.detail).toMatch(/video.*bitrate cap.*remains active/i)
+    expect(rejection?.detail).not.toMatch(/audio|media track.*disabled/i)
+  })
+
   it('stages, approves, restores, and verifies from sender readback without metric improvement', async () => {
     const { store, runtime, video } = await harness()
 

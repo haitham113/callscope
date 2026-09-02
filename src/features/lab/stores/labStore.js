@@ -48,6 +48,57 @@ function emptyEvidenceChecks() {
 
 const HEALTH_SEVERITY = Object.freeze({ healthy: 0, degraded: 1, critical: 2 })
 
+const FAULT_TIMELINE_COPY = Object.freeze({
+  disabled_audio: Object.freeze({
+    diagnosisRequested: 'CallScope is sampling the active disabled-audio fault.',
+    diagnosisCompleted: Object.freeze({
+      title: 'Disabled audio diagnosed',
+      detail: 'Authoritative track state identified a live, attached, but disabled outbound audio track.',
+    }),
+  }),
+  constrained_video_bitrate: Object.freeze({
+    diagnosisRequested: 'CallScope is sampling the active constrained-video-bitrate fault.',
+    diagnosisCompleted: Object.freeze({
+      title: 'Video bitrate cap diagnosed',
+      detail: 'Fresh sender-parameter readback confirmed the active outbound video bitrate cap.',
+    }),
+  }),
+})
+
+const RECOVERY_ACTION_TIMELINE_COPY = Object.freeze({
+  enable_audio_track: Object.freeze({
+    staged: 'Enable the actual outbound audio track after explicit human approval.',
+    approved: 'Approval was recorded in application state. The outbound audio track remains disabled.',
+    rejected: 'The staged plan was rejected. The outbound audio track remains disabled.',
+    applied: 'The allowlisted executor changed the actual outbound audio track.',
+  }),
+  restore_video_bitrate: Object.freeze({
+    staged: 'Restore the preserved known-good video encoding profile after explicit human approval.',
+    approved: 'Approval was recorded in application state. The outbound video bitrate cap remains active.',
+    rejected: 'The staged plan was rejected. The outbound video bitrate cap remains active.',
+    applied: 'The allowlisted executor restored the preserved video sender encoding profile.',
+  }),
+})
+
+function timelineCopyForFault(fault) {
+  return FAULT_TIMELINE_COPY[fault] ?? {
+    diagnosisRequested: 'CallScope is sampling the active call fault.',
+    diagnosisCompleted: {
+      title: 'Call fault diagnosed',
+      detail: 'Fresh authoritative evidence confirmed the active call fault.',
+    },
+  }
+}
+
+function timelineCopyForRecoveryAction(action) {
+  return RECOVERY_ACTION_TIMELINE_COPY[action] ?? {
+    staged: 'Apply the allowlisted recovery action after explicit human approval.',
+    approved: 'Approval was recorded in application state. The active fault remains unchanged.',
+    rejected: 'The staged plan was rejected. The active fault remains unchanged.',
+    applied: 'The allowlisted executor applied the approved recovery action.',
+  }
+}
+
 function stateAfterVerification(verification, snapshot) {
   const verdictState = verification.verdict === 'recovered'
     ? 'healthy'
@@ -289,7 +340,7 @@ export const useLabStore = defineStore('lab', {
         this,
         actor,
         actor === 'Agent' ? 'Agent diagnosis requested' : 'Manual diagnosis requested',
-        'CallScope is sampling the active disabled-audio fault.',
+        timelineCopyForFault(this.activeFault).diagnosisRequested,
         null,
         { type: 'diagnosis_requested' },
       )
@@ -298,15 +349,14 @@ export const useLabStore = defineStore('lab', {
       this.diagnosis = diagnosis
       this.latestSnapshot = snapshot
       const faultState = this.activeFault === 'constrained_video_bitrate' ? 'degraded' : 'critical'
+      const copy = timelineCopyForFault(this.activeFault).diagnosisCompleted
       this.transition(faultState)
       this.healthStatus = faultState === 'degraded' ? 'Degraded' : 'Critical'
       appendTimeline(
         this,
         actor === 'Agent' ? 'Agent' : 'System',
-        this.activeFault === 'constrained_video_bitrate' ? 'Video bitrate cap diagnosed' : 'Disabled audio diagnosed',
-        this.activeFault === 'constrained_video_bitrate'
-          ? 'Fresh sender-parameter readback confirmed the active outbound video bitrate cap.'
-          : 'Authoritative track state identified a live, attached, but disabled outbound audio track.',
+        copy.title,
+        copy.detail,
         {
           diagnosis_id: diagnosis.id,
           severity: diagnosis.findings[0].severity,
@@ -323,9 +373,7 @@ export const useLabStore = defineStore('lab', {
         this,
         actor === 'Agent' ? 'Agent' : 'System',
         'Recovery plan staged',
-        plan.action === 'restore_video_bitrate'
-          ? 'Restore the preserved known-good video encoding profile after explicit human approval.'
-          : 'Enable the actual outbound audio track after explicit human approval.',
+        timelineCopyForRecoveryAction(plan.action).staged,
         { plan_id: plan.id, action: plan.action, expires_at: plan.expires_at },
         { type: 'recovery_plan_staged' },
       )
@@ -338,7 +386,7 @@ export const useLabStore = defineStore('lab', {
       appendUserTimeline(
         this,
         'Recovery approved',
-        'Approval was recorded in application state. The media track was not changed.',
+        timelineCopyForRecoveryAction(this.recoveryPlan.action).approved,
         { plan_id: planId, media_mutated: false },
       )
       return true
@@ -352,7 +400,7 @@ export const useLabStore = defineStore('lab', {
       appendUserTimeline(
         this,
         'Recovery rejected',
-        'The staged plan was rejected. The media track remains disabled.',
+        timelineCopyForRecoveryAction(this.recoveryPlan.action).rejected,
         { plan_id: planId, media_mutated: false },
       )
       return true
@@ -405,9 +453,7 @@ export const useLabStore = defineStore('lab', {
       appendSystemTimeline(
         this,
         'Approved recovery applied',
-        this.recoveryPlan.action === 'restore_video_bitrate'
-          ? 'The allowlisted executor restored the preserved video sender encoding profile.'
-          : 'The allowlisted executor changed the actual outbound audio track.',
+        timelineCopyForRecoveryAction(this.recoveryPlan.action).applied,
         { previous_state: previousState, new_state: newState },
       )
     },
