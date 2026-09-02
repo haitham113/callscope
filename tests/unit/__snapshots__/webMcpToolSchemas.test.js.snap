@@ -57,11 +57,10 @@ exports[`WebMCP tool contracts > preserves the exact input schemas and annotatio
           "type": "string",
         },
         "symptom": {
+          "description": "silent_audio diagnoses the disabled outbound audio track; poor_video diagnoses the constrained outbound video bitrate.",
           "enum": [
             "silent_audio",
             "poor_video",
-            "connection_problem",
-            "unknown",
           ],
           "type": "string",
         },

@@ -1,5 +1,6 @@
 import {
   AUDIO_RECOVERY_ACTION,
+  SUPPORTED_DIAGNOSTIC_SYMPTOMS,
   VIDEO_BITRATE_RECOVERY_ACTION,
   diagnoseDisabledAudio,
   diagnoseVideoBitrate,
@@ -280,6 +281,9 @@ export function createAudioRescueRuntime({
   } = {}, actor) {
     const session = validateSession(sessionId)
     if (!session.ok) return reject(session, 'Diagnosis rejected')
+    if (!SUPPORTED_DIAGNOSTIC_SYMPTOMS.includes(symptom)) {
+      return reject(errorResult('UNSUPPORTED_DIAGNOSTIC_SYMPTOM'), 'Diagnosis rejected')
+    }
     const validAudio = store.state === 'critical' && store.activeFault === 'disabled_audio' && symptom === 'silent_audio'
     const validVideo = store.state === 'degraded' && isVideoFault() && symptom === 'poor_video'
     if (!validAudio && !validVideo) {

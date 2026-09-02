@@ -69,6 +69,11 @@ test('completes the real WebMCP audio rescue with separate human approval', asyn
   )
   expect(registrations.map(({ name }) => name)).toEqual(TOOL_NAMES)
   expect(registrations.every(({ active, signalAborted }) => active && !signalAborted)).toBe(true)
+  const diagnosticRegistration = registrations.find(({ name }) => name === 'run_call_diagnostics')
+  expect(diagnosticRegistration.inputSchema.properties.symptom).toMatchObject({
+    enum: ['silent_audio', 'poor_video'],
+    description: 'silent_audio diagnoses the disabled outbound audio track; poor_video diagnoses the constrained outbound video bitrate.',
+  })
 
   const idleContext = await invoke(page, 'get_lab_context')
   expect(idleContext).toMatchObject({
@@ -258,12 +263,13 @@ test('returns stable schema and session errors without mutating media', async ({
   await expect(page.getByTestId('audio-track-status')).toContainText('disabled')
   await expect(page.getByText('Failure snapshot captured').last()).toBeVisible()
 
-  const invalid = await invoke(page, 'run_call_diagnostics', {
-    session_id: 'not-the-session',
-    symptom: 'invented',
-    actor: 'User',
-  })
-  expect(invalid).toMatchObject({ ok: false, error: { code: 'INVALID_TOOL_INPUT' } })
+  for (const symptom of ['connection_problem', 'unknown', 'invented']) {
+    const invalid = await invoke(page, 'run_call_diagnostics', {
+      session_id: 'not-the-session',
+      symptom,
+    })
+    expect(invalid).toMatchObject({ ok: false, error: { code: 'INVALID_TOOL_INPUT' } })
+  }
 
   const mismatch = await invoke(page, 'inspect_call_state', {
     session_id: 'not-the-session',

@@ -444,7 +444,8 @@ Input:
     "session_id": { "type": "string" },
     "symptom": {
       "type": "string",
-      "enum": ["silent_audio", "poor_video", "connection_problem", "unknown"]
+      "enum": ["silent_audio", "poor_video"],
+      "description": "silent_audio diagnoses the disabled outbound audio track; poor_video diagnoses the constrained outbound video bitrate."
     },
     "sample_duration_ms": {
       "type": "integer",
@@ -862,6 +863,7 @@ Required error codes:
 - `NO_ACTIVE_SESSION`
 - `SESSION_MISMATCH`
 - `INVALID_STATE_TRANSITION`
+- `UNSUPPORTED_DIAGNOSTIC_SYMPTOM`
 - `STATS_UNAVAILABLE`
 - `DIAGNOSIS_STALE`
 - `ACTION_NOT_ALLOWED`

@@ -1,3 +1,5 @@
+import { SUPPORTED_DIAGNOSTIC_SYMPTOMS } from '../diagnostics/services/diagnosticRules.js'
+
 export const TOOL_NAMES = Object.freeze([
   'get_lab_context',
   'inspect_call_state',
@@ -38,14 +40,15 @@ export const TOOL_DEFINITIONS = Object.freeze([
   }),
   Object.freeze({
     name: 'run_call_diagnostics',
-    description: 'Sample the active call and return ranked, evidence-backed diagnostic findings.',
+    description: 'Sample a supported deterministic audio or video fault and return ranked findings, real browser evidence, limitations, and compatible recovery actions.',
     inputSchema: Object.freeze({
       type: 'object',
       properties: Object.freeze({
         session_id: Object.freeze({ type: 'string' }),
         symptom: Object.freeze({
           type: 'string',
-          enum: Object.freeze(['silent_audio', 'poor_video', 'connection_problem', 'unknown']),
+          enum: SUPPORTED_DIAGNOSTIC_SYMPTOMS,
+          description: 'silent_audio diagnoses the disabled outbound audio track; poor_video diagnoses the constrained outbound video bitrate.',
         }),
         sample_duration_ms: Object.freeze({
           type: 'integer',

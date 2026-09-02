@@ -117,6 +117,7 @@ async function harness({
     clock,
     enter(phase) { return entered.get(phase).promise },
     release(phase) { gates.get(phase).resolve() },
+    sampleCount() { return sampleRevision },
   }
 }
 
@@ -144,6 +145,40 @@ describe('Milestone 3 safety integration', () => {
       planId: 'unknown-plan',
     })).error.code).toBe('PLAN_NOT_FOUND')
     expect(subject.audio.enabled).toBe(false)
+  })
+
+  it.each(['connection_problem', 'unknown', 'invented'])('rejects unsupported diagnostic symptom %s without sampling or staging a plan', async (symptom) => {
+    const subject = await harness()
+    await subject.runtime.breakAudioTrack()
+    const before = {
+      state: subject.store.state,
+      healthStatus: subject.store.healthStatus,
+      activeFault: subject.store.activeFault,
+      audioEnabled: subject.audio.enabled,
+      sampleCount: subject.sampleCount(),
+    }
+
+    const result = await subject.runtime.runDiagnostics({
+      sessionId: subject.store.sessionId,
+      symptom,
+    })
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: 'UNSUPPORTED_DIAGNOSTIC_SYMPTOM',
+        message: 'The requested diagnostic symptom is unsupported.',
+      },
+    })
+    expect(subject.store).toMatchObject({
+      state: before.state,
+      healthStatus: before.healthStatus,
+      activeFault: before.activeFault,
+      diagnosis: null,
+      recoveryPlan: null,
+    })
+    expect(subject.audio.enabled).toBe(before.audioEnabled)
+    expect(subject.sampleCount()).toBe(before.sampleCount)
   })
 
   it('sanitizes agent-authored plan text before it reaches application state', async () => {

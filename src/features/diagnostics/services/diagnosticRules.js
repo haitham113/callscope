@@ -1,5 +1,6 @@
 export const AUDIO_RECOVERY_ACTION = 'enable_audio_track'
 export const VIDEO_BITRATE_RECOVERY_ACTION = 'restore_video_bitrate'
+export const SUPPORTED_DIAGNOSTIC_SYMPTOMS = Object.freeze(['silent_audio', 'poor_video'])
 
 export function diagnoseDisabledAudio(snapshot, createId = () => crypto.randomUUID()) {
   const audio = snapshot.tracks.audio

@@ -7,6 +7,7 @@ export const ERROR_DEFINITIONS = Object.freeze({
   NO_ACTIVE_SESSION: Object.freeze({ message: 'No active lab session is available.', recoverable: true, suggested_next_step: 'Start a new demo lab session.' }),
   SESSION_MISMATCH: Object.freeze({ message: 'The request belongs to a different lab session.', recoverable: true, suggested_next_step: 'Inspect the active session and retry with its session identifier.' }),
   INVALID_STATE_TRANSITION: Object.freeze({ message: 'The requested operation is not valid in the current lab state.', recoverable: true, suggested_next_step: 'Wait for the active operation or reset the lab.' }),
+  UNSUPPORTED_DIAGNOSTIC_SYMPTOM: Object.freeze({ message: 'The requested diagnostic symptom is unsupported.', recoverable: true, suggested_next_step: 'Use silent_audio for the disabled-audio fault or poor_video for the constrained-video-bitrate fault.' }),
   STATS_UNAVAILABLE: Object.freeze({ message: 'Authoritative WebRTC statistics are unavailable.', recoverable: true, suggested_next_step: 'Retry the sample or restart the lab.' }),
   DIAGNOSIS_STALE: Object.freeze({ message: 'The live fault state no longer matches the diagnosis.', recoverable: true, suggested_next_step: 'Run diagnostics again against a fresh snapshot.' }),
   ACTION_NOT_ALLOWED: Object.freeze({ message: 'The requested recovery action is not allowed by this diagnosis.', recoverable: true, suggested_next_step: 'Use an action listed by the current diagnosis.' }),

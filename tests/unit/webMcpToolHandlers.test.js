@@ -98,14 +98,13 @@ function capabilities(overrides = {}) {
 }
 
 describe('WebMCP tool handlers', () => {
-  it('validates input before delegation and records the rejected exact tool name', async () => {
+  it.each(['connection_problem', 'unknown', 'not-an-enum'])('rejects unsupported symptom %s before delegation and records the exact tool name', async (symptom) => {
     const agent = capabilities()
     const handlers = createWebMcpToolHandlers(agent)
 
     const result = await handlers.run_call_diagnostics({
       session_id: 'session-1',
-      symptom: 'not-an-enum',
-      actor: 'User',
+      symptom,
     })
 
     expect(result).toMatchObject({ ok: false, error: { code: 'INVALID_TOOL_INPUT' } })

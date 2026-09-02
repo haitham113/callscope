@@ -31,4 +31,14 @@ describe('WebMCP tool contracts', () => {
       inputSchema.additionalProperties === false,
     )).toBe(true)
   })
+
+  it('advertises only symptoms with deterministic end-to-end diagnostic paths', () => {
+    const diagnosticTool = TOOL_DEFINITIONS.find(({ name }) => name === 'run_call_diagnostics')
+
+    expect(diagnosticTool.inputSchema.properties.symptom).toEqual({
+      type: 'string',
+      enum: ['silent_audio', 'poor_video'],
+      description: 'silent_audio diagnoses the disabled outbound audio track; poor_video diagnoses the constrained outbound video bitrate.',
+    })
+  })
 })
